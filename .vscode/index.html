@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Envision Cash Flow</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getFirestore, collection, getDocs } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+
+        // --- CONFIGURATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCTL6KFc45icS6fuZiQ9XpBpHU8SJbKtOo",
+            authDomain: "cash-flow-app-46893.firebaseapp.com",
+            projectId: "cash-flow-app-46893",
+            storageBucket: "cash-flow-app-46893.firebasestorage.app",
+            messagingSenderId: "941640320942",
+            appId: "1:941640320942:web:740e0f2560bbf0d8dfaa3f"
+        };
+        const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyvPFMTM_5M2ahhS29Jf8lKZD5Xk6VJ_fv7ihzdKpYnoYfeVJG-qzPEmY6lmoygClfP/exec";
+        // ---------------------
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // State
+        let rawData = [];
+        let weeks = [];
+
+        async function init() {
+            try {
+                const querySnapshot = await getDocs(collection(db, "CashFlow"));
+                rawData = [];
+                querySnapshot.forEach((doc) => rawData.push(doc.data()));
+
+                // Get unique weeks and sort
+                weeks = [...new Set(rawData.map(d => d.Week_Ending))].sort();
+                renderTable();
+            } catch (err) {
+                console.error('Failed to load data', err);
+            }
+        }
+
+        // Calculation Helper
+        function sum(week, section, cat = null) {
+            return rawData
+                .filter(d => d.Week_Ending === week && d.Section === section)
+                .filter(d => (cat ? d.Category === cat : true))
+                .reduce((acc, curr) => acc + Number(curr.Amount || 0), 0);
+        }
+
+        function fmt(num) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(num);
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('cf-body');
+            if (!tbody) return;
+            let html = "";
+
+            // --- SECTION A: OPERATING ACTIVITIES ---
+            html += `<tr class="bg-gray-100 font-bold"><td colspan="${weeks.length + 1}" class="p-2 pl-4">CASH FLOWS FROM OPERATING ACTIVITIES</td></tr>`;
+
+            // Row 1: Receipts
+            html += `<tr><td class="p-2 border-b">(+) Project Receipts</td>`;
+            weeks.forEach(w => html += `<td class="p-2 text-right border-b text-green-600 border-l">${fmt(sum(w, 'Operating', 'Receipts'))}</td>`);
+            html += `</tr>`;
+
+            // Row 2: General Requirements / OpEx
+            html += `<tr><td class="p-2 border-b">(-) Gen Reqs & OpEx</td>`;
+            weeks.forEach(w => {
+                const val = sum(w, 'Operating', 'Gen Req') + sum(w, 'Operating', 'OpEx') + sum(w, 'Operating', 'Payroll');
+                html += `<td class="p-2 text-right border-b text-red-500 border-l">${fmt(val)}</td>`
+            });
+            html += `</tr>`;
+
+            // Row 3: Quick Pay Outflows (The Project Burn)
+            html += `<tr><td class="p-2 border-b">(-) Quick Pay Disbursements</td>`;
+            weeks.forEach(w => html += `<td class="p-2 text-right border-b text-red-500 border-l">${fmt(sum(w, 'Operating', 'Quick Pay Outflow'))}</td>`);
+            html += `</tr>`;
+
+            // Net Operating
+            html += `<tr class="bg-blue-50 font-bold"><td class="p-2 border-b">Net Operating Cash</td>`;
+            weeks.forEach(w => {
+                const net = sum(w, 'Operating');
+                html += `<td class="p-2 text-right border-b border-l ${net < 0 ? 'text-red-600' : 'text-blue-800'}">${fmt(net)}</td>`
+            });
+            html += `</tr>`;
+
+            // --- SECTION B: FINANCING ACTIVITIES ---
+            html += `<tr class="bg-gray-100 font-bold"><td colspan="${weeks.length + 1}" class="p-2 pl-4 mt-4">CASH FLOWS FROM FINANCING ACTIVITIES</td></tr>`;
+
+            html += `<tr><td class="p-2 border-b">(+) Financing Inflow (Viva/Notes)</td>`;
+            weeks.forEach(w => html += `<td class="p-2 text-right border-b text-blue-600 border-l">${fmt(sum(w, 'Financing', 'Inflow'))}</td>`);
+            html += `</tr>`;
+
+            html += `<tr><td class="p-2 border-b">(-) Debt Repayment (Viva/Brex)</td>`;
+            weeks.forEach(w => html += `<td class="p-2 text-right border-b text-red-600 border-l">${fmt(sum(w, 'Financing', 'Outflow'))}</td>`);
+            html += `</tr>`;
+
+            // Net Financing
+            html += `<tr class="bg-blue-50 font-bold"><td class="p-2 border-b">Net Financing Cash</td>`;
+            weeks.forEach(w => {
+                const net = sum(w, 'Financing');
+                html += `<td class="p-2 text-right border-b border-l ${net < 0 ? 'text-red-600' : 'text-blue-800'}">${fmt(net)}</td>`
+            });
+            html += `</tr>`;
+
+            // --- NET CHANGE ---
+            html += `<tr class="bg-slate-800 text-white font-bold"><td class="p-3">NET CHANGE IN CASH</td>`;
+            weeks.forEach(w => {
+                const total = sum(w, 'Operating') + sum(w, 'Financing');
+                html += `<td class="p-3 text-right border-l border-slate-600">${fmt(total)}</td>`
+            });
+            html += `</tr>`;
+
+            // Render Header
+            const thead = document.getElementById('cf-head');
+            let headHtml = `<tr><th class="p-3 text-left w-64 bg-slate-800 text-white sticky left-0">Line Item</th>`;
+            weeks.forEach(w => headHtml += `<th class="p-3 text-right min-w-[120px] bg-slate-800 text-white border-l border-slate-600">${w}</th>`);
+            thead.innerHTML = headHtml + `</tr>`;
+
+            tbody.innerHTML = html;
+        }
+
+        // --- WRITE FUNCTION ---
+        window.saveForecast = async () => {
+            const btn = document.getElementById('saveBtn');
+            if (btn) btn.innerText = "Saving...";
+
+            const payload = {
+                Entry_ID: "FCST_" + Date.now(),
+                Week_Ending: document.getElementById('in_date').value,
+                Section: document.getElementById('in_sec').value,
+                Category: document.getElementById('in_cat').value,
+                Detail: document.getElementById('in_det').value,
+                Amount: document.getElementById('in_amt').value
+            };
+
+            try {
+                await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } catch (err) {
+                console.warn('Save request may be blocked by CORS (mode:no-cors).', err);
+            }
+
+            if (btn) btn.innerText = "Saved!";
+            setTimeout(() => {
+                if (btn) btn.innerText = "Save Forecast";
+                init(); // Refresh data
+            }, 1500);
+        }
+
+        window.onload = init;
+    </script>
+</head>
+<body class="bg-slate-50 p-8">
+    <div class="max-w-full mx-auto">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-3xl font-bold text-slate-800">Statement of Cash Flows</h1>
+            <div class="text-sm text-gray-500">Backend: Google Sheets | Sync: Firebase</div>
+        </div>
+
+        <div class="overflow-x-auto bg-white shadow-xl rounded-lg mb-8 border border-gray-200">
+            <table class="w-full text-sm">
+                <thead id="cf-head"></thead>
+                <tbody id="cf-body">
+                    <tr><td class="p-8 text-center text-gray-500">Loading Data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="bg-white p-6 rounded shadow-lg max-w-lg">
+            <h3 class="font-bold text-lg mb-4">Add Forecast Item</h3>
+            <div class="space-y-3">
+                <div class="flex gap-2">
+                    <input id="in_date" type="date" class="border p-2 rounded w-1/2">
+                    <input id="in_amt" type="number" placeholder="Amount (Neg for outflow)" class="border p-2 rounded w-1/2">
+                </div>
+                <div class="flex gap-2">
+                    <select id="in_sec" class="border p-2 rounded w-1/2">
+                        <option value="Operating">Operating</option>
+                        <option value="Financing">Financing</option>
+                    </select>
+                    <select id="in_cat" class="border p-2 rounded w-1/2">
+                        <option value="Receipts">Receipts</option>
+                        <option value="Gen Req">Gen Req/OpEx</option>
+                        <option value="Quick Pay Outflow">Quick Pay Outflow</option>
+                        <option value="Inflow">Financing Inflow</option>
+                        <option value="Outflow">Financing Outflow</option>
+                    </select>
+                </div>
+                <input id="in_det" type="text" placeholder="Detail (e.g. Viva Draw for Crown)" class="border p-2 rounded w-full">
+                <button id="saveBtn" onclick="saveForecast()" class="bg-blue-600 text-white w-full py-2 rounded font-bold hover:bg-blue-700">Save Forecast</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
