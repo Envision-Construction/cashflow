@@ -3,14 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Envision Cash Flow Forecast</title>
+    <title>Envision Financial Suite 2.0</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
-    <script type="module">
-        // Import Firebase (Modular SDK)
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-        import { getFirestore, collection, getDocs } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.1.0"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-        // --- CONFIGURATION: PASTE YOUR FIREBASE DETAILS HERE ---
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .sticky-col { position: sticky; left: 0; background-color: white; z-index: 20; box-shadow: 2px 0 5px rgba(0,0,0,0.05); }
+        .accordion-content { transition: max-height 0.3s ease-in-out, opacity 0.3s ease-in-out; max-height: 0; opacity: 0; overflow: hidden; }
+        .accordion-content.expanded { max-height: 2000px; opacity: 1; }
+        .rotate-icon { transition: transform 0.3s; }
+        .expanded .rotate-icon { transform: rotate(180deg); }
+        .statement-header { background-color: #f8fafc; color: #64748b; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+        .statement-row td { padding: 0.75rem 0.5rem; border-bottom: 1px solid #f1f5f9; }
+        .statement-total td { background-color: #f8fafc; font-weight: 700; border-top: 2px solid #e2e8f0; }
+    </style>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getFirestore, collection, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+
+        // --- CONFIGURATION ---
         const firebaseConfig = {
             apiKey: "AIzaSyCTL6KFc45icS6fuZiQ9XpBpHU8SJbKtOo",
             authDomain: "cash-flow-app-46893.firebaseapp.com",
@@ -19,152 +37,386 @@
             messagingSenderId: "941640320942",
             appId: "1:941640320942:web:740e0f2560bbf0d8dfaa3f"
         };
-        
-        // PASTE YOUR DEPLOYED GOOGLE SCRIPT URL HERE
         const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyvPFMTM_5M2ahhS29Jf8lKZD5Xk6VJ_fv7ihzdKpYnoYfeVJG-qzPEmY6lmoygClfP/exec";
 
-        // Initialize
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
+        // --- STATE ---
         let rawData = [];
+        let projectList = {}; 
         let weeks = [];
+        let currentView = 'Dashboard';
+        let includePipeline = false;
+        let minCashTarget = Number(localStorage.getItem('minCashTarget')) || 250000;
+        let openingCashBalance = Number(localStorage.getItem('openingCash')) || 850000;
+        let chartInstance = null;
+        let searchQuery = "";
 
+        // --- INIT ---
         async function init() {
-            const tbody = document.getElementById('cf-body');
-            tbody.innerHTML = '<tr><td colspan="100" class="p-8 text-center text-gray-500">Syncing with Firestore...</td></tr>';
-            
             try {
-                const querySnapshot = await getDocs(collection(db, "CashFlow"));
+                // 1. Fetch Cash Flow Data
+                const snapshot = await getDocs(collection(db, "CashFlow"));
                 rawData = [];
-                querySnapshot.forEach((doc) => rawData.push(doc.data()));
-
-                // Extract unique weeks and sort chronologically
+                snapshot.forEach(doc => rawData.push(doc.data()));
                 weeks = [...new Set(rawData.map(d => d.Week_Ending))].sort();
-                renderTable();
-            } catch (error) {
-                console.error("Error fetching data:", error);
-                tbody.innerHTML = `<tr><td colspan="100" class="p-8 text-center text-red-500">Error loading data. Check console.</td></tr>`;
+
+                // 2. Fetch Procore Project List (BigQuery/Mock Sync)
+                try {
+                    const configDoc = await getDoc(doc(db, "Configuration", "ProcoreProjects"));
+                    if (configDoc.exists()) {
+                        projectList = JSON.parse(configDoc.data().projectList);
+                    }
+                } catch (e) {
+                    console.warn("ProcoreProjects config not found, skipping.");
+                }
+
+                renderSidebar();
+                renderLayout();
+                populateProjectDropdown();
+            } catch (e) {
+                console.error(e);
+                alert("Data Load Error. Check console.");
             }
         }
 
-        // Logic Engine: Sums data based on criteria
-        function sum(week, filters) {
-            return rawData
-                .filter(d => d.Week_Ending === week)
-                .filter(d => {
-                    // Apply all filters (Section, Category, etc.)
-                    for (const key in filters) {
-                        if (d[key] !== filters[key]) return false;
-                    }
-                    return true;
-                })
-                .reduce((acc, curr) => acc + (Number(curr.Amount) || 0), 0);
+        // --- HELPERS ---
+        const getFiltered = (type) => rawData.filter(d => d.DataType === type);
+        const fmt = (num) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(num);
+        const fmtCompact = (num) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: "compact", maximumFractionDigits: 1 }).format(num);
+        const sum = (week, filters, dataset = rawData) => dataset.filter(d => d.Week_Ending === week && Object.entries(filters).every(([k, v]) => d[k] === v)).reduce((acc, c) => acc + (Number(c.Amount)||0), 0);
+
+        // --- UI ---
+        function renderSidebar() {
+            const items = [
+                { name: 'Dashboard', icon: 'layout-dashboard', desc: 'Statement of Cash Flows' },
+                { name: 'WIP Forecast', icon: 'hard-hat', desc: 'Active Projects' },
+                { name: 'Pipeline Forecast', icon: 'filter', desc: 'Pursuit Opportunities' },
+                { name: 'Project Cash Flow', icon: 'briefcase', desc: 'Direct Costs' },
+                { name: 'Quickpay Cash Flow', icon: 'zap', desc: 'Viva / Supply Chain' },
+                { name: 'Operating Budget', icon: 'building', desc: 'OpEx / G&A' },
+                { name: 'Financing Cash Flow', icon: 'landmark', desc: 'Debt Service' },
+                { name: 'Lines of Credit', icon: 'credit-card', desc: 'Brex / Rho Lines' }
+            ];
+            
+            document.getElementById('sidebar-nav').innerHTML = items.map(i => `
+                <button onclick="window.setView('${i.name}')" 
+                    class="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-all rounded-lg mb-1
+                    ${currentView === i.name ? 'bg-slate-800 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}">
+                    <i data-lucide="${i.icon}" class="w-5 h-5"></i>
+                    <div>
+                        <div class="leading-none">${i.name}</div>
+                        <div class="text-[10px] opacity-60 font-normal mt-1 leading-none">${i.desc}</div>
+                    </div>
+                </button>
+            `).join('');
+            lucide.createIcons();
         }
 
-        // Currency Formatter
-        function fmt(num) {
-            if (num === 0) return "-";
-            return new Intl.NumberFormat('en-US', { 
-                style: 'currency', 
-                currency: 'USD', 
-                maximumFractionDigits: 0 
-            }).format(num);
+        function renderLayout() {
+            const main = document.getElementById('main-content');
+            main.innerHTML = `
+                <header class="flex justify-between items-center mb-6 bg-white p-4 rounded-xl shadow-sm border border-slate-100 sticky top-0 z-30">
+                    <div>
+                        <h2 class="text-xl font-bold text-slate-800">${currentView}</h2>
+                        <p class="text-xs text-slate-500 flex items-center gap-1">
+                            ${Object.keys(projectList).length > 0 ? '<span class="text-green-500">●</span> Procore Analytics Connected' : '<span class="text-yellow-500">●</span> Local Mode'}
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                         <div class="flex flex-col text-right mr-2 bg-slate-50 px-3 py-1 rounded-lg border border-slate-200">
+                             <span class="text-[10px] uppercase font-bold text-slate-400">Min. Cash Target</span>
+                             <span class="font-mono font-bold text-slate-700 cursor-pointer hover:text-blue-600" onclick="window.editTarget()">${fmt(minCashTarget)}</span>
+                         </div>
+                        <button onclick="window.openModal()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow transition flex items-center gap-2">
+                            <i data-lucide="plus" class="w-4 h-4"></i> Add Entry
+                        </button>
+                    </div>
+                </header>
+                <div id="view-container"></div>
+            `;
+            
+            const container = document.getElementById('view-container');
+            if (currentView === 'Dashboard') {
+                container.innerHTML = renderDashboard();
+                renderChart();
+            } else {
+                container.innerHTML = renderModuleView(currentView);
+            }
+            lucide.createIcons();
         }
 
-        // Render the Statement of Cash Flows (Direct Method)
-        function renderTable() {
-            const tbody = document.getElementById('cf-body');
-            const thead = document.getElementById('cf-head');
-            let html = "";
+        function renderDashboard() {
+            const weeksList = weeks.slice(0, 13);
+            let currentBal = openingCashBalance;
+            const projectedBalances = [];
+            const weeklyNet = [];
 
-            // 1. HEADER
-            let headHtml = '<tr><th class="p-3 text-left w-64 bg-slate-800 text-white sticky left-0 z-10">Cash Flow Category</th>';
-            weeks.forEach(w => headHtml += `<th class="p-3 text-right min-w-[120px] bg-slate-800 text-white border-l border-slate-600">${w}</th>`);
-            thead.innerHTML = headHtml + '</tr>';
-
-            // --- SECTION A: OPERATING ACTIVITIES ---
-            html += '<tr class="bg-gray-200 font-bold"><td colspan="100" class="p-2 border-b">A. OPERATING ACTIVITIES</td></tr>';
-
-            // Row: Cash Receipts
-            html += '<tr><td class="p-2 border-b font-medium text-slate-700">(+) Cash Receipts</td>';
-            weeks.forEach(w => html += `<td class="p-2 text-right border-b border-l text-gray-700">${fmt(sum(w, {Section: 'Operating', Category: 'Receipts'}))}</td>`);
-            html += '</tr>';
-
-            // Row: Quick Pay Project Spend (Crucial for Project Burn)
-            // Note: We filter for 'Quick Pay Outflow' in Operating section as requested
-            html += '<tr><td class="p-2 border-b font-medium text-slate-700">(-) Project Costs (Quick Pay)</td>';
-            weeks.forEach(w => {
-                const val = sum(w, {Section: 'Operating', Category: 'Quick Pay Outflow'}); 
-                html += `<td class="p-2 text-right border-b border-l text-red-600">${fmt(val)}</td>`;
+            weeksList.forEach(w => {
+                let opIn = sum(w, {}, getFiltered('WIP'));
+                if(includePipeline) opIn += sum(w, {}, getFiltered('Pipeline'));
+                const opOut = sum(w, {}, getFiltered('ProjectCF')) + sum(w, {Category:'Outflow'}, getFiltered('QuickPay')) + sum(w, {}, getFiltered('OpBudget'));
+                const fin = sum(w, {Category:'Inflow'}, getFiltered('QuickPay')) + sum(w, {}, getFiltered('Financing'));
+                const net = opIn + opOut + fin;
+                weeklyNet.push(net);
+                currentBal += net;
+                projectedBalances.push(currentBal);
             });
-            html += '</tr>';
 
-            // Row: Gen Req & OpEx
-            html += '<tr><td class="p-2 border-b font-medium text-slate-700">(-) Gen Reqs & OpEx</td>';
-            weeks.forEach(w => {
-                const val = sum(w, {Section: 'Operating', Category: 'Gen Req'}) + sum(w, {Section: 'Operating', Category: 'OpEx'});
-                html += `<td class="p-2 text-right border-b border-l text-red-600">${fmt(val)}</td>`;
-            });
-            html += '</tr>';
+            const minBal = Math.min(...projectedBalances);
+            const isCritical = minBal < minCashTarget;
 
-            // Net Operating Cash Flow
-            html += '<tr class="bg-blue-50 font-bold"><td class="p-2 border-b text-blue-900">Net Cash from Operations</td>';
-            weeks.forEach(w => {
-                const net = sum(w, {Section: 'Operating'});
-                html += `<td class="p-2 text-right border-b border-l ${net < 0 ? 'text-red-600' : 'text-green-700'}">${fmt(net)}</td>`;
-            });
-            html += '</tr>';
+            return `
+                <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+                        <p class="text-xs font-bold text-slate-400 uppercase">13-Week Low</p>
+                        <h3 class="text-2xl font-bold ${isCritical ? 'text-red-600' : 'text-slate-800'}">${fmt(minBal)}</h3>
+                        <p class="text-xs ${isCritical ? 'text-red-500' : 'text-green-500'} mt-1 flex items-center gap-1">
+                            <i data-lucide="${isCritical ? 'alert-triangle' : 'check-circle'}" class="w-3 h-3"></i>
+                            ${isCritical ? 'Below Target' : 'Target Secure'}
+                        </p>
+                    </div>
+                    <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-100 col-span-2">
+                        <div class="h-16 relative"><canvas id="miniChart"></canvas></div>
+                    </div>
+                     <div class="bg-slate-800 text-white p-4 rounded-xl shadow-lg hover:bg-slate-700 transition cursor-pointer" onclick="window.editOpening()">
+                        <div class="flex justify-between items-start">
+                             <div><p class="text-xs font-bold text-slate-400 uppercase">Opening Balance</p><h3 class="text-2xl font-bold mt-1">${fmt(openingCashBalance)}</h3></div>
+                            <i data-lucide="edit-2" class="w-4 h-4 text-slate-500"></i>
+                        </div>
+                    </div>
+                </div>
 
-            // --- SECTION B: FINANCING ACTIVITIES ---
-            html += '<tr class="bg-gray-200 font-bold"><td colspan="100" class="p-2 border-b mt-4">B. FINANCING ACTIVITIES</td></tr>';
-
-            // Row: Financing Inflows (Viva Funding)
-            html += '<tr><td class="p-2 border-b font-medium text-slate-700">(+) Supply Chain Funding (Viva)</td>';
-            weeks.forEach(w => html += `<td class="p-2 text-right border-b border-l text-green-700">${fmt(sum(w, {Section: 'Financing', Category: 'Inflow'}))}</td>`);
-            html += '</tr>';
-
-            // Row: Financing Repayments
-            html += '<tr><td class="p-2 border-b font-medium text-slate-700">(-) Debt Service / Repayment</td>';
-            weeks.forEach(w => html += `<td class="p-2 text-right border-b border-l text-red-600">${fmt(sum(w, {Section: 'Financing', Category: 'Outflow'}))}</td>`);
-            html += '</tr>';
-
-            // Net Financing Cash Flow
-            html += '<tr class="bg-blue-50 font-bold"><td class="p-2 border-b text-blue-900">Net Cash from Financing</td>';
-            weeks.forEach(w => {
-                const net = sum(w, {Section: 'Financing'});
-                html += `<td class="p-2 text-right border-b border-l ${net < 0 ? 'text-red-600' : 'text-green-700'}">${fmt(net)}</td>`;
-            });
-            html += '</tr>';
-
-            // --- SUMMARY: NET CHANGE IN CASH ---
-            html += '<tr class="bg-slate-800 text-white font-bold"><td class="p-3 border-b">NET CHANGE IN CASH</td>';
-            weeks.forEach(w => {
-                const total = sum(w, {Section: 'Operating'}) + sum(w, {Section: 'Financing'});
-                html += `<td class="p-3 text-right border-l border-slate-600 ${total < 0 ? 'text-red-300' : 'text-green-300'}">${fmt(total)}</td>`;
-            });
-            html += '</tr>';
-
-            tbody.innerHTML = html;
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm border-collapse">
+                            <thead>
+                                <tr class="bg-slate-50 border-b border-slate-200">
+                                    <th class="p-3 text-left min-w-[220px] sticky-col font-bold text-slate-700 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Cash Flow Category</th>
+                                    ${weeksList.map(w => `<th class="p-2 text-right min-w-[110px] text-slate-500 font-medium text-xs border-l border-slate-100 bg-slate-50/50">${w}</th>`).join('')}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Operating Inflows</td><td colspan="${weeksList.length}"></td></tr>
+                                ${renderRow('(+) WIP Receipts', 'WIP', null, weeksList)}
+                                ${includePipeline ? renderRow('(+) Pipeline', 'Pipeline', null, weeksList, 'text-blue-600') : ''}
+                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Project Expenses</td><td colspan="${weeksList.length}"></td></tr>
+                                ${renderRow('(-) Direct Costs', 'ProjectCF', null, weeksList, 'text-red-500')}
+                                ${renderRow('(-) QuickPay Repayment', 'QuickPay', {Category:'Outflow'}, weeksList, 'text-red-500')}
+                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Operating & Overhead</td><td colspan="${weeksList.length}"></td></tr>
+                                ${renderRow('(-) OpEx / G&A', 'OpBudget', null, weeksList, 'text-red-500')}
+                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Adjustments</td><td colspan="${weeksList.length}"></td></tr>
+                                ${renderRow('(+) Viva Funding', 'QuickPay', {Category:'Inflow'}, weeksList, 'text-green-600')}
+                                ${renderRow('(+/-) Debt Activity', 'Financing', null, weeksList, 'text-slate-600')}
+                                <tr class="statement-total">
+                                    <td class="p-3 sticky-col bg-slate-50 border-r border-slate-200">Ending Cash Balance</td>
+                                    ${projectedBalances.map(b => `<td class="text-right p-3 border-l border-slate-200 ${b<minCashTarget ? 'text-red-600 bg-red-50':''}">${fmt(b)}</td>`).join('')}
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
         }
 
-        // --- WRITE FUNCTION (Saves to Sheets -> Syncs to Firebase) ---
-        window.saveForecast = async () => {
+        function renderRow(title, type, filters, weeks, colorClass = "text-slate-600") {
+            let html = `<tr class="statement-row hover:bg-slate-50 transition-colors">
+                <td class="p-3 pl-6 sticky-col text-slate-700 font-medium border-r border-slate-50 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">${title}</td>`;
+            weeks.forEach(w => {
+                const val = sum(w, filters || {}, getFiltered(type));
+                html += `<td class="p-3 text-right border-l border-slate-50 ${colorClass} ${val===0 ? 'opacity-30':''}">${fmt(val)}</td>`;
+            });
+            return html + '</tr>';
+        }
+
+        // --- MODULE VIEW: WITH PROCORE DETAILS ---
+        function renderModuleView(type) {
+            const map = { 'WIP Forecast': 'WIP', 'Pipeline Forecast': 'Pipeline', 'Project Cash Flow': 'ProjectCF', 'Quickpay Cash Flow': 'QuickPay', 'Operating Budget': 'OpBudget', 'Financing Cash Flow': 'Financing', 'Lines of Credit': 'CreditLines' };
+            let data = getFiltered(map[type]);
+
+            if (searchQuery) {
+                const q = searchQuery.toLowerCase();
+                data = data.filter(d => (d.Project && d.Project.toLowerCase().includes(q)) || (d.Detail && d.Detail.toLowerCase().includes(q)));
+            }
+
+            const projects = {};
+            data.forEach(d => {
+                let pName = d.Project || 'General / Unspecified';
+                let pData = null;
+                // Try to find Project Metadata
+                if(projectList[pName]) { pData = projectList[pName]; pName = pData.name; } 
+                else {
+                    const found = Object.values(projectList).find(p => p.name === d.Project);
+                    if(found) { pData = found; pName = found.name; }
+                }
+
+                if (!projects[pName]) projects[pName] = { total: 0, count: 0, records: [], meta: pData };
+                projects[pName].records.push(d);
+                projects[pName].total += (Number(d.Amount) || 0);
+                projects[pName].count++;
+            });
+
+            const sortedProjects = Object.entries(projects).sort((a, b) => a[0].localeCompare(b[0]));
+
+            return `
+                <div class="mb-4 flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200 max-w-md">
+                    <i data-lucide="search" class="w-4 h-4 text-slate-400 ml-2"></i>
+                    <input type="text" placeholder="Search projects..." onkeyup="window.handleSearch(this.value)" class="w-full text-sm outline-none p-1">
+                </div>
+
+                <div class="space-y-3">
+                    ${sortedProjects.length === 0 ? '<div class="p-10 text-center text-slate-400">No data found for this view.</div>' : ''}
+                    ${sortedProjects.map(([projName, data], index) => {
+                        const rowId = `proj-${index}`;
+                        const meta = data.meta;
+                        
+                        return `
+                            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden transition-all hover:shadow-md">
+                                <div class="p-4 flex items-center justify-between cursor-pointer bg-white hover:bg-slate-50 transition" onclick="window.toggleAccordion('${rowId}')">
+                                    <div class="flex items-center gap-3">
+                                        <div class="p-1.5 bg-blue-50 text-blue-600 rounded-lg"><i data-lucide="folder" class="w-4 h-4"></i></div>
+                                        <div>
+                                            <h3 class="font-bold text-slate-700 text-sm">${projName} <span class="text-slate-400 font-normal ml-1 text-xs">${meta ? '#' + meta.number : ''}</span></h3>
+                                            <p class="text-xs text-slate-400">${data.count} entries ${meta ? ' • ' + meta.city : ''}</p>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center gap-6">
+                                        <div class="text-right">
+                                            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Net Flow</span>
+                                            <p class="font-mono font-bold ${data.total < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(data.total)}</p>
+                                        </div>
+                                        <i id="icon-${rowId}" data-lucide="chevron-down" class="w-5 h-5 text-slate-400 rotate-icon"></i>
+                                    </div>
+                                </div>
+                                <div id="${rowId}" class="accordion-content bg-slate-50 border-t border-slate-100">
+                                    
+                                    ${meta && meta.financials ? `
+                                        <div class="grid grid-cols-4 gap-4 p-4 bg-slate-100 border-b border-slate-200 text-xs">
+                                            <div><p class="text-slate-500 font-bold uppercase">Contract Value</p><p class="font-mono font-medium">${fmt(meta.financials.contract + meta.financials.co)}</p></div>
+                                            <div><p class="text-slate-500 font-bold uppercase">Original Budget</p><p class="font-mono font-medium">${fmt(meta.financials.budget)}</p></div>
+                                            <div><p class="text-slate-500 font-bold uppercase">Total Invoiced (Costs)</p><p class="font-mono font-medium">${fmt(meta.financials.paid)}</p></div>
+                                            <div><p class="text-slate-500 font-bold uppercase">Est. Completion</p><p class="font-mono font-medium">${meta.completion || 'N/A'}</p></div>
+                                        </div>
+                                    ` : ''}
+
+                                    <table class="w-full text-sm text-left">
+                                        <thead class="bg-white text-slate-500 font-semibold text-xs uppercase tracking-wider border-b border-slate-100">
+                                            <tr><th class="p-3 pl-6">Week Ending</th><th class="p-3">Category</th><th class="p-3">Detail</th><th class="p-3 text-right pr-6">Amount</th></tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-slate-100">
+                                            ${data.records.sort((a,b)=>a.Week_Ending.localeCompare(b.Week_Ending)).map(r => `
+                                                <tr>
+                                                    <td class="p-3 pl-6 font-mono text-slate-500 text-xs">${r.Week_Ending}</td>
+                                                    <td class="p-3"><span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-white border border-slate-200 text-slate-600">${r.Category}</span></td>
+                                                    <td class="p-3 text-slate-600">${r.Detail || '-'}</td>
+                                                    <td class="p-3 text-right pr-6 font-mono font-medium ${r.Amount < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(r.Amount)}</td>
+                                                </tr>
+                                            `).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        // --- INTERACTION ---
+        window.populateProjectDropdown = () => {
+            const select = document.getElementById('in_proj');
+            if(!select || Object.keys(projectList).length === 0) return; 
+            
+            const parent = select.parentNode;
+            const newSelect = document.createElement('select');
+            newSelect.id = 'in_proj';
+            newSelect.className = select.className;
+            
+            newSelect.innerHTML = '<option value="">Select Procore Project...</option>';
+            Object.values(projectList).sort((a,b) => a.name.localeCompare(b.name)).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.name; 
+                opt.innerText = `${p.name} (${p.number}) - ${fmtCompact(p.financials.contract)}`;
+                newSelect.appendChild(opt);
+            });
+            parent.replaceChild(newSelect, select);
+        };
+
+        window.renderChart = () => {
+            const ctx = document.getElementById('miniChart');
+            if(!ctx) return;
+            if(chartInstance) chartInstance.destroy();
+            
+            const weeksList = weeks.slice(0, 13);
+            let cumulative = openingCashBalance;
+            const balances = weeksList.map(w => {
+                 let opIn = sum(w, {}, getFiltered('WIP'));
+                if(includePipeline) opIn += sum(w, {}, getFiltered('Pipeline'));
+                const opOut = sum(w, {}, getFiltered('ProjectCF')) + sum(w, {Category:'Outflow'}, getFiltered('QuickPay')) + sum(w, {}, getFiltered('OpBudget'));
+                const fin = sum(w, {Category:'Inflow'}, getFiltered('QuickPay')) + sum(w, {}, getFiltered('Financing'));
+                const net = opIn + opOut + fin;
+                cumulative += net;
+                return cumulative;
+            });
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: weeksList,
+                    datasets: [{
+                        data: balances,
+                        borderColor: '#2563eb',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.4,
+                        fill: true,
+                        backgroundColor: (context) => {
+                            const ctx = context.chart.ctx;
+                            const gradient = ctx.createLinearGradient(0, 0, 0, 100);
+                            gradient.addColorStop(0, 'rgba(37,99,235,0.1)');
+                            gradient.addColorStop(1, 'rgba(37,99,235,0)');
+                            return gradient;
+                        }
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, annotation: { annotations: { line1: { type: 'line', yMin: minCashTarget, yMax: minCashTarget, borderColor: 'rgba(239, 68, 68, 0.5)', borderWidth: 1, borderDash: [4, 4] } } } },
+                    scales: { x: { display: false }, y: { display: false } }
+                }
+            });
+        };
+
+        window.setView = (v) => { currentView = v; searchQuery = ""; renderLayout(); };
+        window.handleSearch = (q) => { searchQuery = q; renderLayout(); };
+        window.togglePipe = (c) => { includePipeline = c; renderLayout(); };
+        window.toggleAccordion = (id) => { document.getElementById(id).classList.toggle('expanded'); document.getElementById('icon-'+id).classList.toggle('rotate-180'); };
+        window.editTarget = () => { const n = prompt("Set Min Cash Target:", minCashTarget); if(n) { minCashTarget=Number(n); localStorage.setItem('minCashTarget', n); renderLayout(); }};
+        window.editOpening = () => { const n = prompt("Set Opening Cash Balance:", openingCashBalance); if(n) { openingCashBalance=Number(n); localStorage.setItem('openingCash', n); renderLayout(); }};
+        window.openModal = () => document.getElementById('entry-modal').classList.remove('hidden');
+        window.closeModal = () => document.getElementById('entry-modal').classList.add('hidden');
+        
+        window.saveEntry = async () => { 
             const btn = document.getElementById('saveBtn');
             const originalText = btn.innerText;
             btn.innerText = "Saving...";
             btn.disabled = true;
-
+            
+            const map = { 'WIP Forecast': 'WIP', 'Pipeline Forecast': 'Pipeline', 'Project Cash Flow': 'ProjectCF', 'Quickpay Cash Flow': 'QuickPay', 'Operating Budget': 'OpBudget', 'Financing Cash Flow': 'Financing', 'Lines of Credit': 'CreditLines' };
+            const targetTab = map[currentView];
+            
             const payload = {
                 Entry_ID: "FCST_" + Date.now(),
                 Week_Ending: document.getElementById('in_date').value,
-                Section: document.getElementById('in_sec').value,
+                DataType: targetTab || 'Manual',
+                Project: document.getElementById('in_proj').value || 'General',
                 Category: document.getElementById('in_cat').value,
                 Detail: document.getElementById('in_det').value,
                 Amount: document.getElementById('in_amt').value
             };
 
-            // Basic Validation
             if (!payload.Week_Ending || !payload.Amount) {
                 alert("Please fill in Date and Amount");
                 btn.innerText = originalText;
@@ -173,37 +425,30 @@
             }
 
             try {
-                // Send to Google Apps Script (Middleware)
                 await fetch(GOOGLE_SCRIPT_URL, {
                     method: 'POST',
-                    mode: 'no-cors', // standard for GAS Web Apps
+                    mode: 'no-cors',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
-                // Optimization: Update local data immediately for UI responsiveness
-                rawData.push({
-                    ...payload,
-                    Amount: Number(payload.Amount)
-                });
+                rawData.push({ ...payload, Amount: Number(payload.Amount) });
                 if (!weeks.includes(payload.Week_Ending)) {
                     weeks.push(payload.Week_Ending);
                     weeks.sort();
                 }
-                renderTable();
-
-                btn.innerText = "Saved!";
-                setTimeout(() => {
-                    btn.innerText = originalText;
-                    btn.disabled = false;
-                    // Clear inputs
-                    document.getElementById('in_amt').value = '';
-                    document.getElementById('in_det').value = '';
-                }, 1500);
+                
+                renderLayout();
+                window.closeModal();
+                
+                // Clear inputs
+                document.getElementById('in_amt').value = '';
+                document.getElementById('in_det').value = '';
 
             } catch (e) {
                 console.error(e);
-                alert("Error saving forecast: " + e.message);
+                alert("Error saving: " + e.message);
+            } finally {
                 btn.innerText = originalText;
                 btn.disabled = false;
             }
@@ -212,64 +457,68 @@
         window.onload = init;
     </script>
 </head>
-<body class="bg-slate-50 p-6">
-    <div class="max-w-[95%] mx-auto">
-        <div class="flex justify-between items-center mb-6">
-            <div>
-                <h1 class="text-3xl font-bold text-slate-800">Cash Flow Forecast</h1>
-                <p class="text-sm text-gray-500">Operating vs. Financing (Direct Method)</p>
-            </div>
-            <div class="text-right">
-                <span class="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-bold">Live Sync</span>
+<body class="bg-slate-50 flex h-screen overflow-hidden">
+    <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800">
+        <div class="p-6">
+            <h1 class="text-xl font-bold text-white tracking-tight">Envision <span class="text-blue-500">2.0</span></h1>
+            <p class="text-xs text-slate-500 mt-1">Financial Suite</p>
+        </div>
+        <nav id="sidebar-nav" class="flex-1 overflow-y-auto px-2 space-y-1"></nav>
+        <div class="p-4 border-t border-slate-800">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-xs">JS</div>
+                <div>
+                    <p class="text-sm font-medium text-white">John Smith</p>
+                    <p class="text-xs text-slate-500">CFO Access</p>
+                </div>
             </div>
         </div>
+    </aside>
 
-        <div class="overflow-x-auto bg-white shadow-xl rounded-lg mb-8 border border-gray-200 pb-4">
-            <table class="w-full text-sm border-collapse">
-                <thead id="cf-head"></thead>
-                <tbody id="cf-body"></tbody>
-            </table>
-        </div>
+    <main id="main-content" class="flex-1 overflow-y-auto p-8 relative"></main>
 
-        <div class="bg-white p-6 rounded shadow-lg max-w-2xl mx-auto border border-gray-200">
-            <h3 class="font-bold text-lg mb-4 text-slate-700">Add Forecast Entry</h3>
-            <div class="space-y-4">
-                <div class="flex gap-4">
-                    <div class="w-1/3">
-                        <label class="block text-xs text-gray-500 mb-1">Week Ending</label>
-                        <input id="in_date" type="date" class="border p-2 rounded w-full">
+    <!-- Modal -->
+    <div id="entry-modal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all scale-100">
+            <div class="bg-slate-50 px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                <h3 class="font-bold text-slate-800">Add Forecast Entry</h3>
+                <button onclick="window.closeModal()" class="text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Week Ending</label>
+                        <input id="in_date" type="date" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
-                    <div class="w-1/3">
-                        <label class="block text-xs text-gray-500 mb-1">Section</label>
-                        <select id="in_sec" class="border p-2 rounded w-full">
-                            <option value="Operating">Operating Activities</option>
-                            <option value="Financing">Financing Activities</option>
-                        </select>
-                    </div>
-                    <div class="w-1/3">
-                        <label class="block text-xs text-gray-500 mb-1">Category</label>
-                        <select id="in_cat" class="border p-2 rounded w-full">
-                            <option value="Receipts">Receipts (+) </option>
-                            <option value="Quick Pay Outflow">Quick Pay Outflow (-)</option>
-                            <option value="Gen Req">Gen Req / OpEx (-)</option>
-                            <option value="Inflow">Financing Inflow (+)</option>
-                            <option value="Outflow">Debt Repayment (-)</option>
-                        </select>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Amount</label>
+                        <input id="in_amt" type="number" placeholder="-5000.00" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
                 </div>
-                <div class="flex gap-4">
-                    <div class="w-2/3">
-                        <label class="block text-xs text-gray-500 mb-1">Detail / Project Name</label>
-                        <input id="in_det" type="text" placeholder="e.g. Barnes & Noble Draw" class="border p-2 rounded w-full">
-                    </div>
-                    <div class="w-1/3">
-                        <label class="block text-xs text-gray-500 mb-1">Amount</label>
-                        <input id="in_amt" type="number" placeholder="-15000.00" class="border p-2 rounded w-full">
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Project</label>
+                    <div class="relative">
+                        <select id="in_proj" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white">
+                            <option value="">General / Overhead</option>
+                        </select>
+                        <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none"></i>
                     </div>
                 </div>
-                <button id="saveBtn" onclick="saveForecast()" class="w-full bg-slate-800 text-white font-bold py-2 rounded hover:bg-slate-700 transition">
-                    Save Forecast
-                </button>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
+                        <select id="in_cat" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                            <option value="Receipts">Receipts</option>
+                            <option value="Outflow">Outflow</option>
+                            <option value="Inflow">Inflow</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Detail</label>
+                        <input id="in_det" type="text" placeholder="Description..." class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                </div>
+                <button id="saveBtn" onclick="window.saveEntry()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition shadow-lg shadow-blue-600/20">Save Entry</button>
             </div>
         </div>
     </div>
