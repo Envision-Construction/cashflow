@@ -1,0 +1,13 @@
+{
+  "name": "cashflow",
+  "version": "1.0.0",
+  "description": "Cash Flow Forecast Application",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "firebase-tools": "^13.0.0"
+  }
+}
