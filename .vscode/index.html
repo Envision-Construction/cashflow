@@ -95,7 +95,10 @@
             const expanded = [];
             data.forEach(item => {
                 // Check if item is a Financing Liability definition
-                if (item.DataType === 'Financing' && (item.Frequency || item.Occurrences || item.Liability_ID)) {
+                // Supports new headers: Liability_ID, Creditor, Type, Category, Status, First_Payment, End_Date, Occurrences, Frequency, Amount
+                const isFinancing = item.DataType === 'Financing' || (item.Liability_ID && item.Creditor);
+                
+                if (isFinancing && (item.Frequency || item.Occurrences || item.Liability_ID)) {
                     expanded.push(...generateLiabilitySchedule(item));
                 } else {
                     expanded.push(item);
@@ -125,9 +128,9 @@
                     ...item,
                     Week_Ending: weekEnding.toISOString().split('T')[0],
                     Amount: amount,
-                    Detail: item.Description,
+                    Detail: item.Type || item.Description, // Map Type to Detail
                     DataType: 'Financing',
-                    Project: item.Project || 'General'
+                    Project: item.Creditor || item.Project || 'General' // Map Creditor to Project (grouping)
                 });
 
                 if (frequency === 'weekly') currentDate.setDate(currentDate.getDate() + 7);
