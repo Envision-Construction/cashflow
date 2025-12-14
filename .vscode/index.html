@@ -461,15 +461,15 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Cash Flows from Operating Activities</td><td colspan="${weeksList.length}"></td></tr>
+                                <tr class="statement-header"><td colspan="${weeksList.length + 1}" class="p-2 pl-4 sticky-col bg-slate-50/30">Cash Flows from Operating Activities</td></tr>
                                 ${renderRow('(+) Project Cash Receipts', 'WIP', null, weeksList)}
                                 ${renderRow('(+) Pipeline', 'Pipeline', null, weeksList, 'text-blue-600')}
-                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Project Expenses</td><td colspan="${weeksList.length}"></td></tr>
+                                <tr class="statement-header"><td colspan="${weeksList.length + 1}" class="p-2 pl-4 sticky-col bg-slate-50/30">Project Expenses</td></tr>
                                 ${renderRow('(-) Direct Costs', 'ProjectCF', null, weeksList, 'text-red-500')}
                                 ${renderRow('(-) QuickPay Repayment', 'QuickPay', {Category:'Outflow'}, weeksList, 'text-red-500')}
-                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Operating & Overhead</td><td colspan="${weeksList.length}"></td></tr>
+                                <tr class="statement-header"><td colspan="${weeksList.length + 1}" class="p-2 pl-4 sticky-col bg-slate-50/30">Operating & Overhead</td></tr>
                                 ${renderRow('(-) OpEx / G&A', 'OpBudget', null, weeksList, 'text-red-500')}
-                                <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Cash Flows from Financing Activities</td><td colspan="${weeksList.length}"></td></tr>
+                                <tr class="statement-header"><td colspan="${weeksList.length + 1}" class="p-2 pl-4 sticky-col bg-slate-50/30">Cash Flows from Financing Activities</td></tr>
                                 ${renderRow('(+) Viva Funding', 'QuickPay', {Category:'Inflow'}, weeksList, 'text-green-600')}
                                 ${renderRow('(+/-) Debt Activity', 'Financing', null, weeksList, 'text-slate-600')}
                                 <tr class="statement-total">
