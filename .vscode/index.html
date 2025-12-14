@@ -52,6 +52,7 @@
         let openingCashBalance = Number(localStorage.getItem('openingCash')) || 850000;
         let chartInstance = null;
         let searchQuery = "";
+        let activeOpBudgetFilter = null;
 
         // --- INIT ---
         async function init() {
@@ -61,6 +62,21 @@
                 let fetchedData = [];
                 snapshot.forEach(doc => fetchedData.push(doc.data()));
                 
+                // --- DATA NORMALIZATION ---
+                // Ensure DataType matches what the Dashboard expects (Fixes WIP/Pipeline visibility)
+                const typeMap = { 
+                    'WIP Forecast': 'WIP', 
+                    'Pipeline Forecast': 'Pipeline', 
+                    'Project Cash Flow': 'ProjectCF', 
+                    'Quickpay Cash Flow': 'QuickPay', 
+                    'Operating Budget': 'OpBudget', 
+                    'Financing Cash Flow': 'Financing', 
+                    'Lines of Credit': 'CreditLines' 
+                };
+                fetchedData.forEach(d => {
+                    if (typeMap[d.DataType]) d.DataType = typeMap[d.DataType];
+                });
+
                 // Process Financing Liabilities
                 let processedData = processFinancingData(fetchedData);
                 
@@ -117,10 +133,24 @@
             sixMonthsLater.setMonth(today.getMonth() + 6);
 
             data.forEach(item => {
-                // Check for OpBudget Template Rows
-                // Criteria: DataType='OpBudget', No Week_Ending, Has Pay_Cycle, Frequency, Amount
-                if (item.DataType === 'OpBudget' && !item.Week_Ending && item.Pay_Cycle && item.Frequency && item.Amount) {
-                    expanded.push(...generateOpBudgetSchedule(item, today, sixMonthsLater));
+                // Normalize DataType
+                if (item.DataType === 'Operating Budget') item.DataType = 'OpBudget';
+
+                // Check for OpBudget Items
+                if (item.DataType === 'OpBudget') {
+                    // Force Sign Logic for ALL OpBudget items (Template or Manual)
+                    let amt = parseFloat(item.Amount);
+                    const isInflow = ['Revenue', 'Inflow'].includes(item.Entry_Type);
+                    if (!isInflow && amt > 0) amt = -amt; // Force negative for expenses
+                    if (isInflow && amt < 0) amt = Math.abs(amt); // Force positive for revenue
+                    item.Amount = amt;
+
+                    // Expand Templates if needed
+                    if (!item.Week_Ending && item.Pay_Cycle && item.Frequency && item.Amount) {
+                        expanded.push(...generateOpBudgetSchedule(item, today, sixMonthsLater));
+                    } else {
+                        expanded.push(item);
+                    }
                 } else {
                     expanded.push(item);
                 }
@@ -147,19 +177,12 @@
                 else if (item.Pay_Cycle === '4th Week') targetDate = fridays[3] || fridays[fridays.length - 1]; // Fallback to last friday
                 
                 if (targetDate && targetDate >= startDate) {
-                    // Determine Amount Sign
-                    let amt = parseFloat(item.Amount);
-                    const isInflow = ['Revenue', 'Inflow'].includes(item.Entry_Type);
-                    if (!isInflow && amt > 0) amt = -amt; // Force negative for expenses
-                    if (isInflow && amt < 0) amt = Math.abs(amt); // Force positive for revenue
+                    let amt = item.Amount; // Already normalized
 
                     // Handle One-Time Frequency
                     if (item.Frequency === 'One-Time') {
                         if (item.Due_Date) {
                             const dueDate = new Date(item.Due_Date);
-                            // Only add if it falls in this month logic or just add it once and break?
-                            // Requirement says: Use Due_Date as a one-time payable if Frequency == 'One-Time'
-                            // We should probably just use the Due_Date's week ending.
                             const weekEnding = getNextFriday(dueDate);
                             entries.push({
                                 ...item,
@@ -398,10 +421,29 @@
 
             // --- SPECIAL HANDLING FOR OPERATING BUDGET ---
             if (type === 'Operating Budget') {
+                // Filter by active filter if set
+                if (activeOpBudgetFilter) {
+                    data = data.filter(d => d.Control_Type === activeOpBudgetFilter);
+                }
+
                 // Group by Control_Type -> Expense_Group -> Expense_Item
                 const grouped = {};
                 const controlTypeTotals = {};
                 let grandTotal = 0;
+
+                // Calculate totals from FULL dataset (before filtering for display) to keep summary cards correct
+                // Actually, usually summary cards should reflect the full picture, or the filtered picture?
+                // User said "act as a dynamic filter on the module items".
+                // Usually summary cards act as filters, so they should show totals for that category.
+                // Let's re-calculate totals based on the FULL dataset for the cards, but use filtered data for the list.
+                
+                const fullOpData = getFiltered('OpBudget');
+                fullOpData.forEach(d => {
+                    const ct = d.Control_Type || 'Uncategorized';
+                    const amt = Number(d.Amount) || 0;
+                    controlTypeTotals[ct] = (controlTypeTotals[ct] || 0) + amt;
+                    grandTotal += amt;
+                });
 
                 data.forEach(d => {
                     const ct = d.Control_Type || 'Uncategorized';
@@ -413,21 +455,18 @@
                     if (!grouped[ct][eg][ei]) grouped[ct][eg][ei] = [];
                     
                     grouped[ct][eg][ei].push(d);
-
-                    const amt = Number(d.Amount) || 0;
-                    controlTypeTotals[ct] = (controlTypeTotals[ct] || 0) + amt;
-                    grandTotal += amt;
                 });
 
                 return `
                     <!-- Summary Cards -->
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                        <div class="bg-slate-800 text-white p-4 rounded-xl shadow-lg">
+                        <div class="bg-slate-800 text-white p-4 rounded-xl shadow-lg cursor-pointer hover:bg-slate-700 transition" onclick="window.filterOpBudget(null)">
                             <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Grand Total</p>
                             <h3 class="text-lg font-bold">${fmt(grandTotal)}</h3>
+                            ${activeOpBudgetFilter ? '<p class="text-[10px] text-slate-400 mt-1">Click to Clear Filter</p>' : ''}
                         </div>
                         ${Object.entries(controlTypeTotals).map(([ct, amt]) => `
-                            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                            <div class="bg-white p-4 rounded-xl border ${activeOpBudgetFilter === ct ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200'} shadow-sm cursor-pointer hover:shadow-md transition" onclick="window.filterOpBudget('${ct}')">
                                 <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">${ct}</p>
                                 <h3 class="text-lg font-bold ${amt < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(amt)}</h3>
                             </div>
@@ -441,60 +480,94 @@
                     </div>
 
                     <!-- Grouped Table -->
-                    <div class="space-y-6">
-                        ${Object.entries(grouped).sort().map(([ct, groups]) => `
+                    <div class="space-y-4">
+                        ${Object.entries(grouped).sort().map(([ct, groups], i) => {
+                            const ctId = `ct-${i}`;
+                            const isExpanded = activeOpBudgetFilter === ct; // Auto-expand if filtered
+                            
+                            return `
                             <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                <div class="bg-slate-50 p-3 border-b border-slate-200 flex justify-between items-center">
-                                    <h3 class="font-bold text-slate-700 uppercase tracking-wider text-sm">${ct}</h3>
-                                    <span class="font-mono font-bold text-sm ${controlTypeTotals[ct] < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(controlTypeTotals[ct])}</span>
+                                <div class="bg-slate-50 p-3 border-b border-slate-200 flex justify-between items-center cursor-pointer hover:bg-slate-100 transition" onclick="window.toggleAccordion('${ctId}')">
+                                    <div class="flex items-center gap-3">
+                                        <div class="p-1.5 bg-slate-200 text-slate-700 rounded-lg"><i data-lucide="layers" class="w-4 h-4"></i></div>
+                                        <h3 class="font-bold text-slate-700 uppercase tracking-wider text-sm">${ct}</h3>
+                                    </div>
+                                    <div class="flex items-center gap-4">
+                                        <span class="font-mono font-bold text-sm ${controlTypeTotals[ct] < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(controlTypeTotals[ct])}</span>
+                                        <i id="icon-${ctId}" data-lucide="chevron-down" class="w-5 h-5 text-slate-400 rotate-icon ${isExpanded ? 'rotate-180' : ''}"></i>
+                                    </div>
                                 </div>
-                                <div class="p-0">
-                                    ${Object.entries(groups).sort().map(([eg, items]) => `
-                                        <div class="border-b border-slate-100 last:border-0">
-                                            <div class="bg-slate-50/50 px-4 py-2 text-xs font-bold text-slate-500 uppercase">${eg}</div>
-                                            ${Object.entries(items).sort().map(([ei, rows]) => `
-                                                <div class="overflow-x-auto">
-                                                    <table class="w-full text-xs text-left">
-                                                        <thead class="bg-white text-slate-400 font-medium border-b border-slate-100">
-                                                            <tr>
-                                                                <th class="p-2 pl-4 whitespace-nowrap">Week Ending</th>
-                                                                <th class="p-2 whitespace-nowrap">Entry Type</th>
-                                                                <th class="p-2 whitespace-nowrap">Expense Item</th>
-                                                                <th class="p-2 whitespace-nowrap">Allocation</th>
-                                                                <th class="p-2 whitespace-nowrap">Vendor/Payee</th>
-                                                                <th class="p-2 whitespace-nowrap">Ref</th>
-                                                                <th class="p-2 whitespace-nowrap">Pay Cycle</th>
-                                                                <th class="p-2 whitespace-nowrap">Freq</th>
-                                                                <th class="p-2 whitespace-nowrap">Detail</th>
-                                                                <th class="p-2 whitespace-nowrap">Due Date</th>
-                                                                <th class="p-2 pr-4 text-right whitespace-nowrap">Amount</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody class="divide-y divide-slate-50">
-                                                            ${rows.sort((a,b) => (a.Week_Ending||'').localeCompare(b.Week_Ending||'')).map(r => `
-                                                                <tr class="hover:bg-slate-50">
-                                                                    <td class="p-2 pl-4 font-mono text-slate-600">${r.Week_Ending || '—'}</td>
-                                                                    <td class="p-2 text-slate-600">${r.Entry_Type || '—'}</td>
-                                                                    <td class="p-2 text-slate-600 font-medium">${r.Expense_Item || '—'}</td>
-                                                                    <td class="p-2 text-slate-500">${r.Allocation || '—'}</td>
-                                                                    <td class="p-2 text-slate-600">${r['Vendor/Payee'] || '—'}</td>
-                                                                    <td class="p-2 text-slate-500">${r.Invoice_or_Ref || '—'}</td>
-                                                                    <td class="p-2 text-slate-500">${r.Pay_Cycle || '—'}</td>
-                                                                    <td class="p-2 text-slate-500">${r.Frequency || '—'}</td>
-                                                                    <td class="p-2 text-slate-600 max-w-[200px] truncate" title="${r.Detail}">${r.Detail || '—'}</td>
-                                                                    <td class="p-2 text-slate-500 font-mono">${r.Due_Date ? new Date(r.Due_Date).toLocaleDateString() : '—'}</td>
-                                                                    <td class="p-2 pr-4 text-right font-mono font-medium ${r.Amount < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(r.Amount)}</td>
-                                                                </tr>
-                                                            `).join('')}
-                                                        </tbody>
-                                                    </table>
+                                <div id="${ctId}" class="accordion-content ${isExpanded ? 'expanded' : ''}">
+                                    <div class="p-2 space-y-2 bg-slate-50/50">
+                                        ${Object.entries(groups).sort().map(([eg, items], j) => {
+                                            const egId = `eg-${i}-${j}`;
+                                            // Calculate group total
+                                            let groupTotal = 0;
+                                            Object.values(items).forEach(rows => rows.forEach(r => groupTotal += (Number(r.Amount)||0)));
+
+                                            return `
+                                            <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+                                                <div class="p-3 flex justify-between items-center cursor-pointer hover:bg-slate-50 transition" onclick="window.toggleAccordion('${egId}')">
+                                                    <div class="flex items-center gap-2 pl-2">
+                                                        <i data-lucide="folder" class="w-4 h-4 text-blue-400"></i>
+                                                        <span class="text-sm font-bold text-slate-700">${eg}</span>
+                                                    </div>
+                                                    <div class="flex items-center gap-4">
+                                                        <span class="font-mono text-xs font-bold ${groupTotal < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(groupTotal)}</span>
+                                                        <i id="icon-${egId}" data-lucide="chevron-down" class="w-4 h-4 text-slate-300 rotate-icon"></i>
+                                                    </div>
                                                 </div>
-                                            `).join('')}
-                                        </div>
-                                    `).join('')}
+                                                <div id="${egId}" class="accordion-content border-t border-slate-100">
+                                                    ${Object.entries(items).sort().map(([ei, rows]) => `
+                                                        <div class="border-b border-slate-50 last:border-0">
+                                                            <div class="bg-slate-50 px-4 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                                                <i data-lucide="file-text" class="w-3 h-3"></i> ${ei}
+                                                            </div>
+                                                            <div class="overflow-x-auto">
+                                                                <table class="w-full text-xs text-left">
+                                                                    <thead class="bg-white text-slate-400 font-medium border-b border-slate-100">
+                                                                        <tr>
+                                                                            <th class="p-2 pl-4 whitespace-nowrap">Week Ending</th>
+                                                                            <th class="p-2 whitespace-nowrap">Entry Type</th>
+                                                                            <th class="p-2 whitespace-nowrap">Allocation</th>
+                                                                            <th class="p-2 whitespace-nowrap">Vendor/Payee</th>
+                                                                            <th class="p-2 whitespace-nowrap">Ref</th>
+                                                                            <th class="p-2 whitespace-nowrap">Pay Cycle</th>
+                                                                            <th class="p-2 whitespace-nowrap">Freq</th>
+                                                                            <th class="p-2 whitespace-nowrap">Detail</th>
+                                                                            <th class="p-2 whitespace-nowrap">Due Date</th>
+                                                                            <th class="p-2 pr-4 text-right whitespace-nowrap">Amount</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody class="divide-y divide-slate-50">
+                                                                        ${rows.sort((a,b) => (a.Week_Ending||'').localeCompare(b.Week_Ending||'')).map(r => `
+                                                                            <tr class="hover:bg-slate-50">
+                                                                                <td class="p-2 pl-4 font-mono text-slate-600">${r.Week_Ending || '—'}</td>
+                                                                                <td class="p-2 text-slate-600">${r.Entry_Type || '—'}</td>
+                                                                                <td class="p-2 text-slate-500">${r.Allocation || '—'}</td>
+                                                                                <td class="p-2 text-slate-600">${r['Vendor/Payee'] || '—'}</td>
+                                                                                <td class="p-2 text-slate-500">${r.Invoice_or_Ref || '—'}</td>
+                                                                                <td class="p-2 text-slate-500">${r.Pay_Cycle || '—'}</td>
+                                                                                <td class="p-2 text-slate-500">${r.Frequency || '—'}</td>
+                                                                                <td class="p-2 text-slate-600 max-w-[200px] truncate" title="${r.Detail}">${r.Detail || '—'}</td>
+                                                                                <td class="p-2 text-slate-500 font-mono">${r.Due_Date ? new Date(r.Due_Date).toLocaleDateString() : '—'}</td>
+                                                                                <td class="p-2 pr-4 text-right font-mono font-medium ${r.Amount < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(r.Amount)}</td>
+                                                                            </tr>
+                                                                        `).join('')}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        </div>
+                                                    `).join('')}
+                                                </div>
+                                            </div>
+                                            `;
+                                        }).join('')}
+                                    </div>
                                 </div>
                             </div>
-                        `).join('')}
+                            `;
+                        }).join('')}
                     </div>
                 `;
             }
@@ -778,8 +851,9 @@
             });
         };
 
-        window.setView = (v) => { currentView = v; searchQuery = ""; renderLayout(); };
+        window.setView = (v) => { currentView = v; searchQuery = ""; activeOpBudgetFilter = null; renderLayout(); };
         window.handleSearch = (q) => { searchQuery = q; renderLayout(); };
+        window.filterOpBudget = (f) => { activeOpBudgetFilter = activeOpBudgetFilter === f ? null : f; renderLayout(); };
         window.togglePipe = (c) => { includePipeline = c; renderLayout(); };
         window.toggleAccordion = (id) => { document.getElementById(id).classList.toggle('expanded'); document.getElementById('icon-'+id).classList.toggle('rotate-180'); };
         window.editTarget = () => { const n = prompt("Set Min Cash Target:", minCashTarget); if(n) { minCashTarget=Number(n); localStorage.setItem('minCashTarget', n); renderLayout(); }};
