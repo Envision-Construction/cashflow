@@ -541,7 +541,7 @@
                                         <td class="p-3 border-r border-slate-100 whitespace-nowrap text-slate-500">${p.terms || '-'}</td>
                                         ${sortedMonths.map(m => {
                                             const val = p.monthlyData[m] || 0;
-                                            return `<td class="p-3 text-right border-r border-slate-100 font-mono ${val === 0 ? 'text-slate-300' : 'text-slate-700'}">${val !== 0 ? fmt(val) : '-'}</td>`;
+                                            return `<td onclick="window.editPipelineCell('${p.name.replace(/'/g, "\\'")}', '${m}', ${val})" class="cursor-pointer hover:bg-blue-50 p-3 text-right border-r border-slate-100 font-mono ${val === 0 ? 'text-slate-300' : 'text-slate-700'}">${val !== 0 ? fmt(val) : '-'}</td>`;
                                         }).join('')}
                                     </tr>
                                 `).join('')}
@@ -1082,6 +1082,53 @@
         };
         window.closeModal = () => document.getElementById('entry-modal').classList.add('hidden');
         
+        // --- PIPELINE EDITING ---
+        window.getLastFridayOfMonth = (year, month) => {
+            let d = new Date(year, month + 1, 0);
+            while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
+            return d.toISOString().split('T')[0];
+        };
+
+        window.editPipelineCell = async (projName, monthKey, currentVal) => {
+            const newStr = prompt(`Adjust Monthly Total for ${projName} (${monthKey}):`, currentVal);
+            if (newStr === null) return;
+            
+            const newVal = Number(newStr);
+            if (isNaN(newVal)) { alert("Invalid number"); return; }
+            
+            const delta = newVal - currentVal;
+            if (delta === 0) return;
+
+            const [year, month] = monthKey.split('-').map(Number);
+            const weekEnding = window.getLastFridayOfMonth(year, month - 1);
+
+            const payload = {
+                Entry_ID: "ADJ_" + Date.now(),
+                Week_Ending: weekEnding,
+                DataType: 'Pipeline',
+                Project: projName,
+                Category: 'Receipts',
+                Detail: 'Manual Monthly Adjustment',
+                Amount: delta
+            };
+
+            try {
+                rawData.push(payload);
+                if (!weeks.includes(weekEnding)) { weeks.push(weekEnding); weeks.sort(); }
+                renderLayout();
+
+                await fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } catch (e) {
+                console.error(e);
+                alert("Error saving adjustment: " + e.message);
+            }
+        };
+
         window.saveEntry = async () => { 
             const btn = document.getElementById('saveBtn');
             const originalText = btn.innerText;
