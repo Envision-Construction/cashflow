@@ -85,8 +85,9 @@
                 
                 // Filter weeks to exclude old history (keep recent past + future)
                 const today = new Date();
-                today.setDate(today.getDate() - 7); 
-                const cutoff = today.toISOString().split('T')[0];
+                // Start from the 1st of last month
+                const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+                const cutoff = startOfLastMonth.toISOString().split('T')[0];
 
                 weeks = [...new Set(rawData.map(d => d.Week_Ending))]
                     .filter(w => w && w >= cutoff)
@@ -338,7 +339,8 @@
         }
 
         function renderDashboard() {
-            const weeksList = weeks.slice(0, 13);
+            // Show more weeks to cover history + forecast (e.g., 20 weeks)
+            const weeksList = weeks.slice(0, 20);
             let currentBal = openingCashBalance;
             const projectedBalances = [];
             const weeklyNet = [];
@@ -354,7 +356,14 @@
                 projectedBalances.push(currentBal);
             });
 
-            const minBal = Math.min(...projectedBalances);
+            // Calculate 13-Week Low based on FUTURE cash flows only
+            const todayStr = new Date().toISOString().split('T')[0];
+            const futureBalances = projectedBalances.filter((_, i) => weeksList[i] >= todayStr);
+            // Take the next 13 weeks from today
+            const next13WeeksBalances = futureBalances.slice(0, 13);
+            
+            // Fallback to all projected if no future weeks found (edge case)
+            const minBal = next13WeeksBalances.length > 0 ? Math.min(...next13WeeksBalances) : Math.min(...projectedBalances);
             const isCritical = minBal < minCashTarget;
 
             return `
