@@ -62,7 +62,10 @@
                 snapshot.forEach(doc => fetchedData.push(doc.data()));
                 
                 // Process Financing Liabilities
-                rawData = processFinancingData(fetchedData);
+                let processedData = processFinancingData(fetchedData);
+                
+                // Process Operating Budget Templates
+                rawData = processOpBudgetData(processedData);
                 
                 weeks = [...new Set(rawData.map(d => d.Week_Ending))].filter(w => w).sort();
 
@@ -105,6 +108,94 @@
                 }
             });
             return expanded;
+        }
+
+        function processOpBudgetData(data) {
+            const expanded = [];
+            const today = new Date();
+            const sixMonthsLater = new Date(today);
+            sixMonthsLater.setMonth(today.getMonth() + 6);
+
+            data.forEach(item => {
+                // Check for OpBudget Template Rows
+                // Criteria: DataType='OpBudget', No Week_Ending, Has Pay_Cycle, Frequency, Amount
+                if (item.DataType === 'OpBudget' && !item.Week_Ending && item.Pay_Cycle && item.Frequency && item.Amount) {
+                    expanded.push(...generateOpBudgetSchedule(item, today, sixMonthsLater));
+                } else {
+                    expanded.push(item);
+                }
+            });
+            return expanded;
+        }
+
+        function generateOpBudgetSchedule(item, startDate, endDate) {
+            const entries = [];
+            let currentMonth = new Date(startDate);
+            currentMonth.setDate(1); // Start at beginning of current month
+
+            while (currentMonth <= endDate) {
+                const year = currentMonth.getFullYear();
+                const month = currentMonth.getMonth();
+                
+                // Determine target date based on Pay_Cycle
+                let targetDate = null;
+                const fridays = getAllFridays(year, month);
+                
+                if (item.Pay_Cycle === '1st Week') targetDate = fridays[0];
+                else if (item.Pay_Cycle === '2nd Week') targetDate = fridays[1];
+                else if (item.Pay_Cycle === '3rd Week') targetDate = fridays[2];
+                else if (item.Pay_Cycle === '4th Week') targetDate = fridays[3] || fridays[fridays.length - 1]; // Fallback to last friday
+                
+                if (targetDate && targetDate >= startDate) {
+                    // Determine Amount Sign
+                    let amt = parseFloat(item.Amount);
+                    const isInflow = ['Revenue', 'Inflow'].includes(item.Entry_Type);
+                    if (!isInflow && amt > 0) amt = -amt; // Force negative for expenses
+                    if (isInflow && amt < 0) amt = Math.abs(amt); // Force positive for revenue
+
+                    // Handle One-Time Frequency
+                    if (item.Frequency === 'One-Time') {
+                        if (item.Due_Date) {
+                            const dueDate = new Date(item.Due_Date);
+                            // Only add if it falls in this month logic or just add it once and break?
+                            // Requirement says: Use Due_Date as a one-time payable if Frequency == 'One-Time'
+                            // We should probably just use the Due_Date's week ending.
+                            const weekEnding = getNextFriday(dueDate);
+                            entries.push({
+                                ...item,
+                                Week_Ending: weekEnding.toISOString().split('T')[0],
+                                Amount: amt,
+                                DataType: 'OpBudget'
+                            });
+                            return entries; // Stop after adding one-time
+                        }
+                    } else {
+                        // Recurring
+                        entries.push({
+                            ...item,
+                            Week_Ending: targetDate.toISOString().split('T')[0],
+                            Amount: amt,
+                            DataType: 'OpBudget'
+                        });
+                    }
+                }
+
+                currentMonth.setMonth(currentMonth.getMonth() + 1);
+            }
+            return entries;
+        }
+
+        function getAllFridays(year, month) {
+            const d = new Date(year, month, 1);
+            const fridays = [];
+            while (d.getDay() !== 5) {
+                d.setDate(d.getDate() + 1);
+            }
+            while (d.getMonth() === month) {
+                fridays.push(new Date(d));
+                d.setDate(d.getDate() + 7);
+            }
+            return fridays;
         }
 
         function generateLiabilitySchedule(item) {
@@ -302,7 +393,110 @@
 
             if (searchQuery) {
                 const q = searchQuery.toLowerCase();
-                data = data.filter(d => (d.Project && d.Project.toLowerCase().includes(q)) || (d.Detail && d.Detail.toLowerCase().includes(q)));
+                data = data.filter(d => (d.Project && d.Project.toLowerCase().includes(q)) || (d.Detail && d.Detail.toLowerCase().includes(q)) || (d.Expense_Group && d.Expense_Group.toLowerCase().includes(q)) || (d.Expense_Item && d.Expense_Item.toLowerCase().includes(q)) || (d.Vendor_Payee && d.Vendor_Payee.toLowerCase().includes(q)));
+            }
+
+            // --- SPECIAL HANDLING FOR OPERATING BUDGET ---
+            if (type === 'Operating Budget') {
+                // Group by Control_Type -> Expense_Group -> Expense_Item
+                const grouped = {};
+                const controlTypeTotals = {};
+                let grandTotal = 0;
+
+                data.forEach(d => {
+                    const ct = d.Control_Type || 'Uncategorized';
+                    const eg = d.Expense_Group || 'General';
+                    const ei = d.Expense_Item || 'Misc';
+                    
+                    if (!grouped[ct]) grouped[ct] = {};
+                    if (!grouped[ct][eg]) grouped[ct][eg] = {};
+                    if (!grouped[ct][eg][ei]) grouped[ct][eg][ei] = [];
+                    
+                    grouped[ct][eg][ei].push(d);
+
+                    const amt = Number(d.Amount) || 0;
+                    controlTypeTotals[ct] = (controlTypeTotals[ct] || 0) + amt;
+                    grandTotal += amt;
+                });
+
+                return `
+                    <!-- Summary Cards -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <div class="bg-slate-800 text-white p-4 rounded-xl shadow-lg">
+                            <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Grand Total</p>
+                            <h3 class="text-lg font-bold">${fmt(grandTotal)}</h3>
+                        </div>
+                        ${Object.entries(controlTypeTotals).map(([ct, amt]) => `
+                            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                                <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">${ct}</p>
+                                <h3 class="text-lg font-bold ${amt < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(amt)}</h3>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <!-- Search -->
+                    <div class="mb-4 flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200 max-w-md">
+                        <i data-lucide="search" class="w-4 h-4 text-slate-400 ml-2"></i>
+                        <input type="text" placeholder="Search expenses..." onkeyup="window.handleSearch(this.value)" class="w-full text-sm outline-none p-1">
+                    </div>
+
+                    <!-- Grouped Table -->
+                    <div class="space-y-6">
+                        ${Object.entries(grouped).sort().map(([ct, groups]) => `
+                            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div class="bg-slate-50 p-3 border-b border-slate-200 flex justify-between items-center">
+                                    <h3 class="font-bold text-slate-700 uppercase tracking-wider text-sm">${ct}</h3>
+                                    <span class="font-mono font-bold text-sm ${controlTypeTotals[ct] < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(controlTypeTotals[ct])}</span>
+                                </div>
+                                <div class="p-0">
+                                    ${Object.entries(groups).sort().map(([eg, items]) => `
+                                        <div class="border-b border-slate-100 last:border-0">
+                                            <div class="bg-slate-50/50 px-4 py-2 text-xs font-bold text-slate-500 uppercase">${eg}</div>
+                                            ${Object.entries(items).sort().map(([ei, rows]) => `
+                                                <div class="overflow-x-auto">
+                                                    <table class="w-full text-xs text-left">
+                                                        <thead class="bg-white text-slate-400 font-medium border-b border-slate-100">
+                                                            <tr>
+                                                                <th class="p-2 pl-4 whitespace-nowrap">Week Ending</th>
+                                                                <th class="p-2 whitespace-nowrap">Entry Type</th>
+                                                                <th class="p-2 whitespace-nowrap">Expense Item</th>
+                                                                <th class="p-2 whitespace-nowrap">Allocation</th>
+                                                                <th class="p-2 whitespace-nowrap">Vendor/Payee</th>
+                                                                <th class="p-2 whitespace-nowrap">Ref</th>
+                                                                <th class="p-2 whitespace-nowrap">Pay Cycle</th>
+                                                                <th class="p-2 whitespace-nowrap">Freq</th>
+                                                                <th class="p-2 whitespace-nowrap">Detail</th>
+                                                                <th class="p-2 whitespace-nowrap">Due Date</th>
+                                                                <th class="p-2 pr-4 text-right whitespace-nowrap">Amount</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody class="divide-y divide-slate-50">
+                                                            ${rows.sort((a,b) => (a.Week_Ending||'').localeCompare(b.Week_Ending||'')).map(r => `
+                                                                <tr class="hover:bg-slate-50">
+                                                                    <td class="p-2 pl-4 font-mono text-slate-600">${r.Week_Ending || '—'}</td>
+                                                                    <td class="p-2 text-slate-600">${r.Entry_Type || '—'}</td>
+                                                                    <td class="p-2 text-slate-600 font-medium">${r.Expense_Item || '—'}</td>
+                                                                    <td class="p-2 text-slate-500">${r.Allocation || '—'}</td>
+                                                                    <td class="p-2 text-slate-600">${r['Vendor/Payee'] || '—'}</td>
+                                                                    <td class="p-2 text-slate-500">${r.Invoice_or_Ref || '—'}</td>
+                                                                    <td class="p-2 text-slate-500">${r.Pay_Cycle || '—'}</td>
+                                                                    <td class="p-2 text-slate-500">${r.Frequency || '—'}</td>
+                                                                    <td class="p-2 text-slate-600 max-w-[200px] truncate" title="${r.Detail}">${r.Detail || '—'}</td>
+                                                                    <td class="p-2 text-slate-500 font-mono">${r.Due_Date ? new Date(r.Due_Date).toLocaleDateString() : '—'}</td>
+                                                                    <td class="p-2 pr-4 text-right font-mono font-medium ${r.Amount < 0 ? 'text-red-600' : 'text-green-600'}">${fmt(r.Amount)}</td>
+                                                                </tr>
+                                                            `).join('')}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            `).join('')}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
             }
 
             // --- SPECIAL HANDLING FOR FINANCING CASH FLOW ---
@@ -590,7 +784,24 @@
         window.toggleAccordion = (id) => { document.getElementById(id).classList.toggle('expanded'); document.getElementById('icon-'+id).classList.toggle('rotate-180'); };
         window.editTarget = () => { const n = prompt("Set Min Cash Target:", minCashTarget); if(n) { minCashTarget=Number(n); localStorage.setItem('minCashTarget', n); renderLayout(); }};
         window.editOpening = () => { const n = prompt("Set Opening Cash Balance:", openingCashBalance); if(n) { openingCashBalance=Number(n); localStorage.setItem('openingCash', n); renderLayout(); }};
-        window.openModal = () => document.getElementById('entry-modal').classList.remove('hidden');
+        window.openModal = () => {
+            const modal = document.getElementById('entry-modal');
+            const standardFields = document.getElementById('standard-fields');
+            const opBudgetFields = document.getElementById('opbudget-fields');
+            const modalTitle = document.getElementById('modal-title');
+
+            modal.classList.remove('hidden');
+            
+            if (currentView === 'Operating Budget') {
+                standardFields.classList.add('hidden');
+                opBudgetFields.classList.remove('hidden');
+                modalTitle.innerText = "Add Operating Budget Entry";
+            } else {
+                standardFields.classList.remove('hidden');
+                opBudgetFields.classList.add('hidden');
+                modalTitle.innerText = "Add Forecast Entry";
+            }
+        };
         window.closeModal = () => document.getElementById('entry-modal').classList.add('hidden');
         
         window.saveEntry = async () => { 
@@ -602,21 +813,52 @@
             const map = { 'WIP Forecast': 'WIP', 'Pipeline Forecast': 'Pipeline', 'Project Cash Flow': 'ProjectCF', 'Quickpay Cash Flow': 'QuickPay', 'Operating Budget': 'OpBudget', 'Financing Cash Flow': 'Financing', 'Lines of Credit': 'CreditLines' };
             const targetTab = map[currentView];
             
-            const payload = {
-                Entry_ID: "FCST_" + Date.now(),
-                Week_Ending: document.getElementById('in_date').value,
-                DataType: targetTab || 'Manual',
-                Project: document.getElementById('in_proj').value || 'General',
-                Category: document.getElementById('in_cat').value,
-                Detail: document.getElementById('in_det').value,
-                Amount: document.getElementById('in_amt').value
-            };
+            let payload = {};
 
-            if (!payload.Week_Ending || !payload.Amount) {
-                alert("Please fill in Date and Amount");
-                btn.innerText = originalText;
-                btn.disabled = false;
-                return;
+            if (currentView === 'Operating Budget') {
+                payload = {
+                    Entry_ID: "OP_" + Date.now(),
+                    DataType: 'OpBudget',
+                    Week_Ending: document.getElementById('op_date').value, // Can be blank
+                    Entry_Type: document.getElementById('op_type').value,
+                    Expense_Group: document.getElementById('op_group').value,
+                    Expense_Item: document.getElementById('op_item').value,
+                    Control_Type: document.getElementById('op_control').value,
+                    Allocation: document.getElementById('op_alloc').value,
+                    'Vendor/Payee': document.getElementById('op_vendor').value,
+                    Invoice_or_Ref: document.getElementById('op_ref').value,
+                    Pay_Cycle: document.getElementById('op_cycle').value,
+                    Frequency: document.getElementById('op_freq').value,
+                    Detail: document.getElementById('op_detail').value,
+                    Amount: document.getElementById('op_amount').value,
+                    Due_Date: document.getElementById('op_due').value
+                };
+                
+                // Validation for OpBudget
+                if (!payload.Amount) {
+                    alert("Amount is required");
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    return;
+                }
+            } else {
+                // Standard Logic
+                payload = {
+                    Entry_ID: "FCST_" + Date.now(),
+                    Week_Ending: document.getElementById('in_date').value,
+                    DataType: targetTab || 'Manual',
+                    Project: document.getElementById('in_proj').value || 'General',
+                    Category: document.getElementById('in_cat').value,
+                    Detail: document.getElementById('in_det').value,
+                    Amount: document.getElementById('in_amt').value
+                };
+
+                if (!payload.Week_Ending || !payload.Amount) {
+                    alert("Please fill in Date and Amount");
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    return;
+                }
             }
 
             try {
@@ -627,8 +869,34 @@
                     body: JSON.stringify(payload)
                 });
 
-                rawData.push({ ...payload, Amount: Number(payload.Amount) });
-                if (!weeks.includes(payload.Week_Ending)) {
+                // For local update, we need to re-process if it's a template
+                // But for simplicity, we just push and re-render. 
+                // If it's a template, processOpBudgetData needs to run again.
+                // We can just push to rawData and re-run init-like logic or just reload.
+                // Better: Push to rawData, then if OpBudget, re-run processOpBudgetData on the single item and add results?
+                // Simplest: Push to rawData. If OpBudget, we might need to reload to see expansion or just alert user.
+                // Let's try to be smart:
+                
+                if (currentView === 'Operating Budget') {
+                    // If it's a template, we need to expand it locally to see it immediately
+                    if (!payload.Week_Ending && payload.Pay_Cycle && payload.Frequency) {
+                        const today = new Date();
+                        const sixMonthsLater = new Date(today);
+                        sixMonthsLater.setMonth(today.getMonth() + 6);
+                        const expanded = generateOpBudgetSchedule(payload, today, sixMonthsLater);
+                        rawData.push(...expanded);
+                        // Also push the template itself so it persists in memory? 
+                        // Actually rawData usually holds the source. 
+                        // But here rawData is holding the expanded version for display.
+                        // So pushing expanded entries is correct for display.
+                    } else {
+                        rawData.push({ ...payload, Amount: Number(payload.Amount) });
+                    }
+                } else {
+                    rawData.push({ ...payload, Amount: Number(payload.Amount) });
+                }
+
+                if (payload.Week_Ending && !weeks.includes(payload.Week_Ending)) {
                     weeks.push(payload.Week_Ending);
                     weeks.sort();
                 }
@@ -637,8 +905,10 @@
                 window.closeModal();
                 
                 // Clear inputs
-                document.getElementById('in_amt').value = '';
-                document.getElementById('in_det').value = '';
+                if(currentView !== 'Operating Budget') {
+                    document.getElementById('in_amt').value = '';
+                    document.getElementById('in_det').value = '';
+                }
 
             } catch (e) {
                 console.error(e);
@@ -674,45 +944,136 @@
 
     <!-- Modal -->
     <div id="entry-modal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center backdrop-blur-sm">
-        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all scale-100">
-            <div class="bg-slate-50 px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-                <h3 class="font-bold text-slate-800">Add Forecast Entry</h3>
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all scale-100 max-h-[90vh] overflow-y-auto">
+            <div class="bg-slate-50 px-6 py-4 border-b border-slate-100 flex justify-between items-center sticky top-0 z-10">
+                <h3 id="modal-title" class="font-bold text-slate-800">Add Forecast Entry</h3>
                 <button onclick="window.closeModal()" class="text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
             </div>
             <div class="p-6 space-y-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Week Ending</label>
-                        <input id="in_date" type="date" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                
+                <!-- Standard Fields -->
+                <div id="standard-fields" class="space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Week Ending</label>
+                            <input id="in_date" type="date" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Amount</label>
+                            <input id="in_amt" type="number" placeholder="-5000.00" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
                     </div>
                     <div>
-                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Amount</label>
-                        <input id="in_amt" type="number" placeholder="-5000.00" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Project</label>
+                        <div class="relative">
+                            <select id="in_proj" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white">
+                                <option value="">General / Overhead</option>
+                            </select>
+                            <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none"></i>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
+                            <select id="in_cat" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                                <option value="Receipts">Receipts</option>
+                                <option value="Outflow">Outflow</option>
+                                <option value="Inflow">Inflow</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Detail</label>
+                            <input id="in_det" type="text" placeholder="Description..." class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
                     </div>
                 </div>
-                <div>
-                    <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Project</label>
-                    <div class="relative">
-                        <select id="in_proj" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none bg-white">
-                            <option value="">General / Overhead</option>
-                        </select>
-                        <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none"></i>
+
+                <!-- Operating Budget Fields -->
+                <div id="opbudget-fields" class="space-y-4 hidden">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Control Type</label>
+                            <select id="op_control" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                                <option value="Controllables">Controllables</option>
+                                <option value="Non-Controllables">Non-Controllables</option>
+                                <option value="Headcount">Headcount</option>
+                                <option value="Payables">Payables</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Entry Type</label>
+                            <select id="op_type" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                                <option value="Expense">Expense</option>
+                                <option value="Budget">Budget</option>
+                                <option value="Revenue">Revenue</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Expense Group</label>
+                            <input id="op_group" type="text" placeholder="e.g. Marketing" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Expense Item</label>
+                            <input id="op_item" type="text" placeholder="e.g. Ads" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Vendor/Payee</label>
+                            <input id="op_vendor" type="text" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Amount</label>
+                            <input id="op_amount" type="number" placeholder="0.00" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Pay Cycle</label>
+                            <select id="op_cycle" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                                <option value="">None</option>
+                                <option value="1st Week">1st Week</option>
+                                <option value="2nd Week">2nd Week</option>
+                                <option value="3rd Week">3rd Week</option>
+                                <option value="4th Week">4th Week</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Frequency</label>
+                            <select id="op_freq" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                                <option value="Monthly">Monthly</option>
+                                <option value="One-Time">One-Time</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Week Ending (Optional)</label>
+                            <input id="op_date" type="date" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Due Date</label>
+                            <input id="op_due" type="date" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Detail / Description</label>
+                        <input id="op_detail" type="text" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Allocation</label>
+                            <input id="op_alloc" type="text" placeholder="100%" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Invoice / Ref</label>
+                            <input id="op_ref" type="text" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                        </div>
                     </div>
                 </div>
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Category</label>
-                        <select id="in_cat" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
-                            <option value="Receipts">Receipts</option>
-                            <option value="Outflow">Outflow</option>
-                            <option value="Inflow">Inflow</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Detail</label>
-                        <input id="in_det" type="text" placeholder="Description..." class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
-                    </div>
-                </div>
+
                 <button id="saveBtn" onclick="window.saveEntry()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition shadow-lg shadow-blue-600/20">Save Entry</button>
             </div>
         </div>
