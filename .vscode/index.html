@@ -755,6 +755,131 @@
                 `;
             }
 
+            // --- SPECIAL HANDLING FOR PIPELINE ---
+            if (type === 'Pipeline Forecast') {
+                // 1. Generate 12-Month Horizon
+                const months = [];
+                const cursor = new Date(pipelineStartMonth);
+                for (let i = 0; i < 12; i++) {
+                    const y = cursor.getFullYear();
+                    const m = cursor.getMonth();
+                    months.push({
+                        key: `${y}-${String(m + 1).padStart(2, '0')}`,
+                        label: cursor.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+                    });
+                    cursor.setMonth(cursor.getMonth() + 1);
+                }
+
+                // 2. Aggregate Data
+                const projects = {};
+                data.forEach(d => {
+                    const pName = d.Project || 'Unknown Project';
+                    if (!projects[pName]) {
+                        // Try to get metadata from projectList first, then from record
+                        const meta = projectList[pName] || {};
+                        projects[pName] = {
+                            name: pName,
+                            source: meta.Source || d.Source || 'Buildr',
+                            stage: meta.Stage || d.Stage || '1. Pursuit',
+                            number: meta.number || d.Project_Number || '',
+                            terms: meta.Terms || d.Terms || 'Net 30',
+                            monthlyData: {}
+                        };
+                    }
+                    
+                    if (d.Week_Ending) {
+                        const date = new Date(d.Week_Ending);
+                        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                        projects[pName].monthlyData[monthKey] = (projects[pName].monthlyData[monthKey] || 0) + (Number(d.Amount) || 0);
+                    }
+                });
+
+                const sortedProjects = Object.values(projects).sort((a, b) => {
+                    if (a.stage !== b.stage) return a.stage.localeCompare(b.stage);
+                    return a.name.localeCompare(b.name);
+                });
+
+                // 3. Calculate Totals
+                const monthTotals = {};
+                months.forEach(m => {
+                    monthTotals[m.key] = sortedProjects.reduce((sum, p) => sum + (p.monthlyData[m.key] || 0), 0);
+                });
+
+                return `
+                    <div class="flex items-center gap-4 mb-4">
+                        <div class="flex bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+                            <button onclick="window.shiftPipeline(-1)" class="px-3 py-2 hover:bg-slate-50 border-r border-slate-200 text-slate-600"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+                            <button onclick="window.resetPipeline()" class="px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">Current Month</button>
+                            <button onclick="window.shiftPipeline(1)" class="px-3 py-2 hover:bg-slate-50 border-l border-slate-200 text-slate-600"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+                        </div>
+                        <div class="text-xs text-slate-500">Showing forecast from <span class="font-bold text-slate-700">${months[0].label}</span> to <span class="font-bold text-slate-700">${months[11].label}</span></div>
+                    </div>
+
+                    <div class="overflow-x-auto bg-white rounded-xl shadow-sm border border-slate-200 max-h-[calc(100vh-200px)]">
+                        <table class="w-full text-xs text-left border-collapse relative">
+                            <thead class="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200 sticky top-0 z-20">
+                                <tr>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-0 bg-slate-50 z-30 w-[100px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Source</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-[100px] bg-slate-50 z-30 w-[100px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Stage</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-[200px] bg-slate-50 z-30 w-[200px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Project Name</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-[400px] bg-slate-50 z-30 w-[100px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Project No.</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-[500px] bg-slate-50 z-30 w-[100px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Terms</th>
+                                    ${months.map(m => `<th class="p-2 text-right min-w-[120px] border-r border-slate-100 whitespace-nowrap">${m.label}</th>`).join('')}
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                ${sortedProjects.map(p => `
+                                    <tr class="hover:bg-slate-50 transition-colors group">
+                                        <td class="p-0 border-r border-slate-100 sticky left-0 bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                            <select onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Source', this.value)" class="w-full h-full p-2 bg-transparent outline-none text-xs text-slate-600 border-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
+                                                <option value="Buildr" ${p.source==='Buildr'?'selected':''}>Buildr</option>
+                                                <option value="Procore" ${p.source==='Procore'?'selected':''}>Procore</option>
+                                                <option value="Manual" ${p.source==='Manual'?'selected':''}>Manual</option>
+                                            </select>
+                                        </td>
+                                        <td class="p-0 border-r border-slate-100 sticky left-[100px] bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                            <select onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Stage', this.value)" class="w-full h-full p-2 bg-transparent outline-none text-xs text-slate-600 border-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
+                                                <option value="1. Pursuit" ${p.stage==='1. Pursuit'?'selected':''}>1. Pursuit</option>
+                                                <option value="2. Backlog" ${p.stage==='2. Backlog'?'selected':''}>2. Backlog</option>
+                                                <option value="3. Active" ${p.stage==='3. Active'?'selected':''}>3. Active</option>
+                                            </select>
+                                        </td>
+                                        <td class="p-2 border-r border-slate-100 sticky left-[200px] bg-white z-10 font-bold text-slate-700 shadow-[2px_0_5px_rgba(0,0,0,0.05)] truncate max-w-[200px]" title="${p.name}">${p.name}</td>
+                                        <td class="p-0 border-r border-slate-100 sticky left-[400px] bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                            <input type="text" value="${p.number}" onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Project_Number', this.value)" class="w-full h-full p-2 bg-transparent outline-none text-xs font-mono text-slate-500 focus:ring-2 focus:ring-inset focus:ring-blue-500">
+                                        </td>
+                                        <td class="p-0 border-r border-slate-100 sticky left-[500px] bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                            <input type="text" value="${p.terms}" onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Terms', this.value)" class="w-full h-full p-2 bg-transparent outline-none text-xs text-slate-500 focus:ring-2 focus:ring-inset focus:ring-blue-500">
+                                        </td>
+                                        ${months.map(m => {
+                                            const val = p.monthlyData[m.key] || 0;
+                                            return `
+                                                <td class="p-0 border-r border-slate-100">
+                                                    <input 
+                                                        type="text" 
+                                                        value="${val !== 0 ? fmt(val) : ''}" 
+                                                        data-original="${val}"
+                                                        onblur="window.updatePipelineAmount('${p.name.replace(/'/g, "\\'")}', '${m.key}', this)"
+                                                        onfocus="this.select()"
+                                                        class="w-full h-full p-2 text-right font-mono text-xs outline-none focus:bg-blue-50 focus:ring-2 focus:ring-inset focus:ring-blue-500 ${val===0 ? 'text-slate-300' : 'text-slate-700'}"
+                                                    >
+                                                </td>
+                                            `;
+                                        }).join('')}
+                                    </tr>
+                                `).join('')}
+                                <tr class="bg-slate-50 font-bold border-t-2 border-slate-300 sticky bottom-0 z-20 shadow-[0_-2px_5px_rgba(0,0,0,0.05)]">
+                                    <td class="p-3 border-r border-slate-200 sticky left-0 bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" colspan="3">TOTAL</td>
+                                    <td class="p-3 border-r border-slate-200 sticky left-[400px] bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]"></td>
+                                    <td class="p-3 border-r border-slate-200 sticky left-[500px] bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]"></td>
+                                    ${months.map(m => `<td class="p-3 text-right border-r border-slate-200 font-mono text-slate-800">${fmt(monthTotals[m.key])}</td>`).join('')}
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+
             // --- SPECIAL HANDLING FOR OPERATING BUDGET ---
             if (type === 'Operating Budget') {
                 // Filter by active filter if set
