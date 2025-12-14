@@ -372,9 +372,41 @@
                 renderChart();
             } else {
                 container.innerHTML = renderModuleView(currentView);
+                // Recalculate sticky column positions after render
+                setTimeout(window.updateStickyOffsets, 0);
             }
             lucide.createIcons();
         }
+
+        window.updateStickyOffsets = () => {
+            const table = document.querySelector('#view-container table');
+            if (!table) return;
+            
+            const headers = table.querySelectorAll('thead th.sticky-col');
+            if (headers.length === 0) return;
+
+            let currentLeft = 0;
+            headers.forEach((th, index) => {
+                const rect = th.getBoundingClientRect();
+                const width = rect.width;
+                
+                // Apply to header
+                th.style.left = `${currentLeft}px`;
+                
+                // Apply to all cells in this column in tbody
+                const cells = table.querySelectorAll(`tbody td[data-sticky-idx="${index}"]`);
+                cells.forEach(td => td.style.left = `${currentLeft}px`);
+                
+                // Apply to total row cells
+                const totalCells = table.querySelectorAll(`tbody tr:last-child td[data-sticky-idx="${index}"]`);
+                totalCells.forEach(td => td.style.left = `${currentLeft}px`);
+
+                currentLeft += width;
+            });
+        };
+
+        // Add resize listener
+        window.addEventListener('resize', window.updateStickyOffsets);
 
         function renderDashboard() {
             // Show more weeks to cover history + forecast (e.g., 20 weeks)
@@ -640,41 +672,41 @@
                         <table class="w-full text-xs text-left border-collapse relative">
                             <thead class="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200 sticky top-0 z-20">
                                 <tr>
-                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-0 bg-slate-50 z-30 w-[100px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Source</th>
-                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-[100px] bg-slate-50 z-30 w-[100px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Stage</th>
-                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-[200px] bg-slate-50 z-30 w-[200px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Project Name</th>
-                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky left-[400px] bg-slate-50 z-30 w-[100px] shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Project No.</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="0">Source</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="1">Stage</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="2">Project Name</th>
+                                    <th class="p-2 border-r border-slate-200 whitespace-nowrap sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="3">Project No.</th>
                                     ${months.map(m => `<th class="p-2 text-right min-w-[120px] border-r border-slate-100 whitespace-nowrap">${m.label}</th>`).join('')}
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100">
                                 ${sortedProjects.map(p => `
                                     <tr class="hover:bg-slate-50 transition-colors group">
-                                        <td class="p-0 border-r border-slate-100 sticky left-0 bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                        <td class="p-0 border-r border-slate-100 sticky-col bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="0">
                                             <select onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Source', this.value)" class="w-full h-full p-2 bg-transparent outline-none text-xs text-slate-600 border-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
                                                 <option value="Buildr" ${p.source==='Buildr'?'selected':''}>Buildr</option>
                                                 <option value="Procore" ${p.source==='Procore'?'selected':''}>Procore</option>
                                                 <option value="Manual" ${p.source==='Manual'?'selected':''}>Manual</option>
                                             </select>
                                         </td>
-                                        <td class="p-0 border-r border-slate-100 sticky left-[100px] bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                        <td class="p-0 border-r border-slate-100 sticky-col bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="1">
                                             <select onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Stage', this.value)" class="w-full h-full p-2 bg-transparent outline-none text-xs text-slate-600 border-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
                                                 <option value="1. Pursuit" ${p.stage==='1. Pursuit'?'selected':''}>1. Pursuit</option>
                                                 <option value="2. Backlog" ${p.stage==='2. Backlog'?'selected':''}>2. Backlog</option>
                                                 <option value="3. Active" ${p.stage==='3. Active'?'selected':''}>3. Active</option>
                                             </select>
                                         </td>
-                                        <td class="p-0 border-r border-slate-100 sticky left-[200px] bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                        <td class="p-0 border-r border-slate-100 sticky-col bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="2">
                                             <input 
                                                 type="text" 
                                                 list="project-options" 
                                                 value="${p.name}" 
                                                 onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Project', this.value)" 
-                                                class="w-full h-full p-2 bg-transparent outline-none text-xs font-bold text-slate-700 focus:ring-2 focus:ring-inset focus:ring-blue-500 truncate"
+                                                class="w-full h-full p-2 bg-transparent outline-none text-xs font-bold text-slate-700 focus:ring-2 focus:ring-inset focus:ring-blue-500"
                                                 title="${p.name}"
                                             >
                                         </td>
-                                        <td class="p-0 border-r border-slate-100 sticky left-[400px] bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">
+                                        <td class="p-0 border-r border-slate-100 sticky-col bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="3">
                                             <input type="text" value="${p.number}" onchange="window.updatePipelineMeta('${p.name.replace(/'/g, "\\'")}', 'Project_Number', this.value)" class="w-full h-full p-2 bg-transparent outline-none text-xs font-mono text-slate-500 focus:ring-2 focus:ring-inset focus:ring-blue-500">
                                         </td>
                                         ${months.map(m => {
@@ -695,8 +727,10 @@
                                     </tr>
                                 `).join('')}
                                 <tr class="bg-slate-50 font-bold border-t-2 border-slate-300 sticky bottom-0 z-20 shadow-[0_-2px_5px_rgba(0,0,0,0.05)]">
-                                    <td class="p-3 border-r border-slate-200 sticky left-0 bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" colspan="3">TOTAL</td>
-                                    <td class="p-3 border-r border-slate-200 sticky left-[400px] bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]"></td>
+                                    <td class="p-3 border-r border-slate-200 sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="0">TOTAL</td>
+                                    <td class="p-3 border-r border-slate-200 sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="1"></td>
+                                    <td class="p-3 border-r border-slate-200 sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="2"></td>
+                                    <td class="p-3 border-r border-slate-200 sticky-col bg-slate-50 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" data-sticky-idx="3"></td>
                                     ${months.map(m => `<td class="p-3 text-right border-r border-slate-200 font-mono text-slate-800">${fmt(monthTotals[m.key])}</td>`).join('')}
                                 </tr>
                             </tbody>
