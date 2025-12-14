@@ -58,9 +58,13 @@
             try {
                 // 1. Fetch Cash Flow Data
                 const snapshot = await getDocs(collection(db, "CashFlow"));
-                rawData = [];
-                snapshot.forEach(doc => rawData.push(doc.data()));
-                weeks = [...new Set(rawData.map(d => d.Week_Ending))].sort();
+                let fetchedData = [];
+                snapshot.forEach(doc => fetchedData.push(doc.data()));
+                
+                // Process Financing Liabilities
+                rawData = processFinancingData(fetchedData);
+                
+                weeks = [...new Set(rawData.map(d => d.Week_Ending))].filter(w => w).sort();
 
                 // 2. Fetch Procore Project List (BigQuery/Mock Sync)
                 try {
@@ -86,6 +90,64 @@
         const fmt = (num) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(num);
         const fmtCompact = (num) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: "compact", maximumFractionDigits: 1 }).format(num);
         const sum = (week, filters, dataset = rawData) => dataset.filter(d => d.Week_Ending === week && Object.entries(filters).every(([k, v]) => d[k] === v)).reduce((acc, c) => acc + (Number(c.Amount)||0), 0);
+
+        function processFinancingData(data) {
+            const expanded = [];
+            data.forEach(item => {
+                // Check if item is a Financing Liability definition
+                if (item.DataType === 'Financing' && (item.Frequency || item.Occurrences || item.Liability_ID)) {
+                    expanded.push(...generateLiabilitySchedule(item));
+                } else {
+                    expanded.push(item);
+                }
+            });
+            return expanded;
+        }
+
+        function generateLiabilitySchedule(item) {
+            const entries = [];
+            let currentDate = new Date(item.First_Payment);
+            if (isNaN(currentDate.getTime())) return []; 
+
+            const occurrences = parseInt(item.Occurrences) || 999;
+            const frequency = (item.Frequency || '').toLowerCase();
+            const amount = parseFloat(item.Amount) || 0;
+            const endDate = item.End_Date ? new Date(item.End_Date) : null;
+
+            let count = 0;
+            while (count < occurrences) {
+                if (endDate && currentDate > endDate) break;
+                if (count > 520) break; // Safety limit (10 years)
+
+                const weekEnding = getNextFriday(currentDate);
+                
+                entries.push({
+                    ...item,
+                    Week_Ending: weekEnding.toISOString().split('T')[0],
+                    Amount: amount,
+                    Detail: item.Description,
+                    DataType: 'Financing',
+                    Project: item.Project || 'General'
+                });
+
+                if (frequency === 'weekly') currentDate.setDate(currentDate.getDate() + 7);
+                else if (frequency === 'bi-weekly') currentDate.setDate(currentDate.getDate() + 14);
+                else if (frequency === 'monthly') currentDate.setMonth(currentDate.getMonth() + 1);
+                else break; 
+                
+                count++;
+            }
+            return entries;
+        }
+
+        function getNextFriday(date) {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = 5 - day; 
+            if (diff < 0) d.setDate(d.getDate() + (diff + 7));
+            else d.setDate(d.getDate() + diff);
+            return d;
+        }
 
         // --- UI ---
         function renderSidebar() {
