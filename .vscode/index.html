@@ -47,7 +47,7 @@
         let projectList = {}; 
         let weeks = [];
         let currentView = 'Dashboard';
-        let includePipeline = false;
+        let includePipeline = true;
         let minCashTarget = Number(localStorage.getItem('minCashTarget')) || 250000;
         let openingCashBalance = Number(localStorage.getItem('openingCash')) || 850000;
         let chartInstance = null;
@@ -463,7 +463,7 @@
                             <tbody>
                                 <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Operating Inflows</td><td colspan="${weeksList.length}"></td></tr>
                                 ${renderRow('(+) Project Cash Receipts', 'WIP', null, weeksList)}
-                                ${includePipeline ? renderRow('(+) Pipeline', 'Pipeline', null, weeksList, 'text-blue-600') : ''}
+                                ${renderRow('(+) Pipeline', 'Pipeline', null, weeksList, 'text-blue-600')}
                                 <tr class="statement-header"><td class="p-2 pl-4 sticky-col bg-slate-50/30">Project Expenses</td><td colspan="${weeksList.length}"></td></tr>
                                 ${renderRow('(-) Direct Costs', 'ProjectCF', null, weeksList, 'text-red-500')}
                                 ${renderRow('(-) QuickPay Repayment', 'QuickPay', {Category:'Outflow'}, weeksList, 'text-red-500')}
