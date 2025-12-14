@@ -137,6 +137,8 @@
         function processOpBudgetData(data) {
             const expanded = [];
             const today = new Date();
+            // Start expansion from last month to populate dashboard history
+            const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
             const sixMonthsLater = new Date(today);
             sixMonthsLater.setMonth(today.getMonth() + 6);
 
@@ -146,6 +148,13 @@
 
                 // Check for OpBudget Items
                 if (item.DataType === 'OpBudget') {
+                    // Fix: Force Payroll/Headcount items to 'Headcount' Control_Type to prevent splitting/double counting
+                    const group = (item.Expense_Group || '').toLowerCase();
+                    const name = (item.Expense_Item || '').toLowerCase();
+                    if (group.includes('payroll') || group.includes('headcount') || group.includes('salaries') || name.includes('payroll')) {
+                        item.Control_Type = 'Headcount';
+                    }
+
                     // Force Sign Logic for ALL OpBudget items (Template or Manual)
                     let amt = parseFloat(item.Amount);
                     const isInflow = ['Revenue', 'Inflow'].includes(item.Entry_Type);
@@ -155,7 +164,7 @@
 
                     // Expand Templates if needed
                     if (!item.Week_Ending && item.Frequency && item.Amount) {
-                        expanded.push(...generateOpBudgetSchedule(item, today, sixMonthsLater));
+                        expanded.push(...generateOpBudgetSchedule(item, startOfLastMonth, sixMonthsLater));
                     } else {
                         expanded.push(item);
                     }
@@ -473,18 +482,22 @@
                 const controlTypeTotals = {};
                 let grandTotal = 0;
 
-                // Calculate totals from FULL dataset (before filtering for display) to keep summary cards correct
-                // Actually, usually summary cards should reflect the full picture, or the filtered picture?
-                // User said "act as a dynamic filter on the module items".
-                // Usually summary cards act as filters, so they should show totals for that category.
-                // Let's re-calculate totals based on the FULL dataset for the cards, but use filtered data for the list.
-                
+                // Calculate totals based on NEXT 30 DAYS to show "Monthly Amount"
+                const today = new Date();
+                const next30Days = new Date(today);
+                next30Days.setDate(today.getDate() + 30);
+                const todayStr = today.toISOString().split('T')[0];
+                const next30DaysStr = next30Days.toISOString().split('T')[0];
+
                 const fullOpData = getFiltered('OpBudget');
                 fullOpData.forEach(d => {
-                    const ct = d.Control_Type || 'Uncategorized';
-                    const amt = Number(d.Amount) || 0;
-                    controlTypeTotals[ct] = (controlTypeTotals[ct] || 0) + amt;
-                    grandTotal += amt;
+                    // Only sum items in the next 30 days for the summary cards
+                    if (d.Week_Ending >= todayStr && d.Week_Ending <= next30DaysStr) {
+                        const ct = d.Control_Type || 'Uncategorized';
+                        const amt = Number(d.Amount) || 0;
+                        controlTypeTotals[ct] = (controlTypeTotals[ct] || 0) + amt;
+                        grandTotal += amt;
+                    }
                 });
 
                 data.forEach(d => {
@@ -503,7 +516,7 @@
                     <!-- Summary Cards -->
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                         <div class="bg-slate-800 text-white p-4 rounded-xl shadow-lg cursor-pointer hover:bg-slate-700 transition" onclick="window.filterOpBudget(null)">
-                            <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Grand Total</p>
+                            <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Monthly Total</p>
                             <h3 class="text-lg font-bold">${fmt(grandTotal)}</h3>
                             ${activeOpBudgetFilter ? '<p class="text-[10px] text-slate-400 mt-1">Click to Clear Filter</p>' : ''}
                         </div>
@@ -1057,16 +1070,15 @@
                 
                 if (currentView === 'Operating Budget') {
                     // If it's a template, we need to expand it locally to see it immediately
-                    if (!payload.Week_Ending && payload.Pay_Cycle && payload.Frequency) {
+                    // Updated condition: Frequency is enough (Pay_Cycle optional for Weekly)
+                    if (!payload.Week_Ending && payload.Frequency) {
                         const today = new Date();
+                        const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
                         const sixMonthsLater = new Date(today);
                         sixMonthsLater.setMonth(today.getMonth() + 6);
-                        const expanded = generateOpBudgetSchedule(payload, today, sixMonthsLater);
+                        
+                        const expanded = generateOpBudgetSchedule(payload, startOfLastMonth, sixMonthsLater);
                         rawData.push(...expanded);
-                        // Also push the template itself so it persists in memory? 
-                        // Actually rawData usually holds the source. 
-                        // But here rawData is holding the expanded version for display.
-                        // So pushing expanded entries is correct for display.
                     } else {
                         rawData.push({ ...payload, Amount: Number(payload.Amount) });
                     }
