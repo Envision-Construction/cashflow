@@ -154,7 +154,7 @@
                     item.Amount = amt;
 
                     // Expand Templates if needed
-                    if (!item.Week_Ending && item.Pay_Cycle && item.Frequency && item.Amount) {
+                    if (!item.Week_Ending && item.Frequency && item.Amount) {
                         expanded.push(...generateOpBudgetSchedule(item, today, sixMonthsLater));
                     } else {
                         expanded.push(item);
@@ -168,47 +168,75 @@
 
         function generateOpBudgetSchedule(item, startDate, endDate) {
             const entries = [];
+            let amt = item.Amount; 
+
+            if (item.Frequency === 'One-Time') {
+                if (item.Due_Date) {
+                    const dueDate = new Date(item.Due_Date);
+                    const weekEnding = getNextFriday(dueDate);
+                    entries.push({
+                        ...item,
+                        Week_Ending: weekEnding.toISOString().split('T')[0],
+                        Amount: amt,
+                        DataType: 'OpBudget'
+                    });
+                }
+                return entries;
+            }
+
+            // Weekly / Bi-Weekly Logic
+            if (item.Frequency === 'Weekly' || item.Frequency === 'Bi-Weekly') {
+                let cursor = item.Due_Date ? new Date(item.Due_Date) : new Date(startDate);
+                const interval = item.Frequency === 'Weekly' ? 7 : 14;
+                
+                // Safety: If cursor is way behind startDate, advance it
+                if (cursor < startDate) {
+                    const diffTime = Math.abs(startDate - cursor);
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+                    const cycles = Math.floor(diffDays / interval);
+                    cursor.setDate(cursor.getDate() + (cycles * interval));
+                }
+
+                while (cursor <= endDate) {
+                    if (cursor >= startDate) {
+                        const weekEnding = getNextFriday(cursor);
+                        entries.push({
+                            ...item,
+                            Week_Ending: weekEnding.toISOString().split('T')[0],
+                            Amount: amt,
+                            DataType: 'OpBudget'
+                        });
+                    }
+                    cursor.setDate(cursor.getDate() + interval);
+                }
+                return entries;
+            }
+
+            // Monthly Logic (Default)
             let currentMonth = new Date(startDate);
-            currentMonth.setDate(1); // Start at beginning of current month
+            currentMonth.setDate(1); 
 
             while (currentMonth <= endDate) {
                 const year = currentMonth.getFullYear();
                 const month = currentMonth.getMonth();
                 
-                // Determine target date based on Pay_Cycle
                 let targetDate = null;
                 const fridays = getAllFridays(year, month);
                 
-                if (item.Pay_Cycle === '1st Week') targetDate = fridays[0];
-                else if (item.Pay_Cycle === '2nd Week') targetDate = fridays[1];
-                else if (item.Pay_Cycle === '3rd Week') targetDate = fridays[2];
-                else if (item.Pay_Cycle === '4th Week') targetDate = fridays[3] || fridays[fridays.length - 1]; // Fallback to last friday
+                const cycle = item.Pay_Cycle || '1st Week';
+
+                if (cycle === '1st Week') targetDate = fridays[0];
+                else if (cycle === '2nd Week') targetDate = fridays[1];
+                else if (cycle === '3rd Week') targetDate = fridays[2];
+                else if (cycle === '4th Week') targetDate = fridays[3] || fridays[fridays.length - 1]; 
                 
                 if (targetDate && targetDate >= startDate) {
-                    let amt = item.Amount; // Already normalized
-
-                    // Handle One-Time Frequency
-                    if (item.Frequency === 'One-Time') {
-                        if (item.Due_Date) {
-                            const dueDate = new Date(item.Due_Date);
-                            const weekEnding = getNextFriday(dueDate);
-                            entries.push({
-                                ...item,
-                                Week_Ending: weekEnding.toISOString().split('T')[0],
-                                Amount: amt,
-                                DataType: 'OpBudget'
-                            });
-                            return entries; // Stop after adding one-time
-                        }
-                    } else {
-                        // Recurring
-                        entries.push({
-                            ...item,
-                            Week_Ending: targetDate.toISOString().split('T')[0],
-                            Amount: amt,
-                            DataType: 'OpBudget'
-                        });
-                    }
+                    entries.push({
+                        ...item,
+                        Week_Ending: targetDate.toISOString().split('T')[0],
+                        Amount: amt,
+                        DataType: 'OpBudget'
+                    });
                 }
 
                 currentMonth.setMonth(currentMonth.getMonth() + 1);
@@ -1194,6 +1222,8 @@
                             <label class="block text-xs font-bold text-slate-500 uppercase mb-1">Frequency</label>
                             <select id="op_freq" class="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
                                 <option value="Monthly">Monthly</option>
+                                <option value="Weekly">Weekly</option>
+                                <option value="Bi-Weekly">Bi-Weekly</option>
                                 <option value="One-Time">One-Time</option>
                             </select>
                         </div>
