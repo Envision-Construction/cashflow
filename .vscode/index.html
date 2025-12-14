@@ -557,6 +557,92 @@
                 `;
             }
 
+            // --- SPECIAL HANDLING FOR PIPELINE ---
+            if (type === 'Pipeline Forecast') {
+                const projects = {};
+                const allMonths = new Set();
+
+                data.forEach(d => {
+                    const pName = d.Project || 'Unknown Project';
+                    if (!projects[pName]) {
+                        projects[pName] = {
+                            name: pName,
+                            source: d.Source || 'Unknown',
+                            stage: d.Stage || 'Unknown',
+                            number: d.Project_Number || '',
+                            terms: d.Terms || '',
+                            monthlyData: {}
+                        };
+                        if (projectList[pName]) {
+                            const meta = projectList[pName];
+                            projects[pName].number = projects[pName].number || meta.number;
+                        }
+                    }
+                    
+                    if (d.Week_Ending) {
+                        const date = new Date(d.Week_Ending);
+                        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                        allMonths.add(monthKey);
+                        projects[pName].monthlyData[monthKey] = (projects[pName].monthlyData[monthKey] || 0) + (Number(d.Amount) || 0);
+                    }
+                });
+
+                const sortedMonths = Array.from(allMonths).sort();
+                const sortedProjects = Object.values(projects).sort((a, b) => {
+                    if (a.stage !== b.stage) return a.stage.localeCompare(b.stage);
+                    return a.name.localeCompare(b.name);
+                });
+
+                const monthTotals = {};
+                sortedMonths.forEach(m => {
+                    monthTotals[m] = sortedProjects.reduce((sum, p) => sum + (p.monthlyData[m] || 0), 0);
+                });
+
+                const formatMonth = (m) => {
+                    const [y, mon] = m.split('-');
+                    const d = new Date(parseInt(y), parseInt(mon) - 1, 1);
+                    return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+                };
+
+                return `
+                    <div class="overflow-x-auto bg-white rounded-xl shadow-sm border border-slate-200">
+                        <table class="w-full text-xs text-left border-collapse">
+                            <thead class="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
+                                <tr>
+                                    <th class="p-3 border-r border-slate-100 whitespace-nowrap sticky left-0 bg-slate-50 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Source</th>
+                                    <th class="p-3 border-r border-slate-100 whitespace-nowrap sticky left-[80px] bg-slate-50 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Stage</th>
+                                    <th class="p-3 border-r border-slate-100 whitespace-nowrap sticky left-[160px] bg-slate-50 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">Project Name</th>
+                                    <th class="p-3 border-r border-slate-100 whitespace-nowrap">Project No.</th>
+                                    <th class="p-3 border-r border-slate-100 whitespace-nowrap">Terms</th>
+                                    ${sortedMonths.map(m => `<th class="p-3 text-right min-w-[100px] border-r border-slate-100 whitespace-nowrap">${formatMonth(m)}</th>`).join('')}
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                ${sortedProjects.map(p => `
+                                    <tr class="hover:bg-slate-50 transition-colors">
+                                        <td class="p-3 border-r border-slate-100 whitespace-nowrap sticky left-0 bg-white z-10 font-medium text-slate-600 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">${p.source}</td>
+                                        <td class="p-3 border-r border-slate-100 whitespace-nowrap sticky left-[80px] bg-white z-10 text-slate-600 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">${p.stage}</td>
+                                        <td class="p-3 border-r border-slate-100 whitespace-nowrap sticky left-[160px] bg-white z-10 font-bold text-slate-700 shadow-[2px_0_5px_rgba(0,0,0,0.05)]">${p.name}</td>
+                                        <td class="p-3 border-r border-slate-100 whitespace-nowrap font-mono text-slate-500">${p.number || '-'}</td>
+                                        <td class="p-3 border-r border-slate-100 whitespace-nowrap text-slate-500">${p.terms || '-'}</td>
+                                        ${sortedMonths.map(m => {
+                                            const val = p.monthlyData[m] || 0;
+                                            return `<td onclick="window.editPipelineCell('${p.name.replace(/'/g, "\\'")}', '${m}', ${val})" class="cursor-pointer hover:bg-blue-50 p-3 text-right border-r border-slate-100 font-mono ${val === 0 ? 'text-slate-300' : 'text-slate-700'}">${val !== 0 ? fmt(val) : '-'}</td>`;
+                                        }).join('')}
+                                    </tr>
+                                `).join('')}
+                                <tr class="bg-slate-50 font-bold border-t border-slate-200">
+                                    <td class="p-3 border-r border-slate-200 sticky left-0 bg-slate-50 z-10 shadow-[2px_0_5px_rgba(0,0,0,0.05)]" colspan="3">TOTAL</td>
+                                    <td class="p-3 border-r border-slate-200"></td>
+                                    <td class="p-3 border-r border-slate-200"></td>
+                                    ${sortedMonths.map(m => `<td class="p-3 text-right border-r border-slate-200 font-mono text-slate-800">${fmt(monthTotals[m])}</td>`).join('')}
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+
             // --- SPECIAL HANDLING FOR OPERATING BUDGET ---
             if (type === 'Operating Budget') {
                 // Filter by active filter if set
