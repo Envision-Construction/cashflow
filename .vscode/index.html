@@ -67,7 +67,7 @@
                 const typeMap = { 
                     'WIP Forecast': 'WIP', 
                     'Pipeline Forecast': 'Pipeline', 
-                    'Project Cash Flow': 'ProjectCF', 
+                    'Project Expenses': 'ProjectCF', 
                     'Quickpay Cash Flow': 'QuickPay', 
                     'Operating Budget': 'OpBudget', 
                     'Financing Cash Flow': 'Financing', 
@@ -279,7 +279,7 @@
                 { name: 'Dashboard', icon: 'layout-dashboard', desc: 'Statement of Cash Flows' },
                 { name: 'WIP Forecast', icon: 'hard-hat', desc: 'Active Projects' },
                 { name: 'Pipeline Forecast', icon: 'filter', desc: 'Pursuit Opportunities' },
-                { name: 'Project Cash Flow', icon: 'briefcase', desc: 'Direct Costs' },
+                { name: 'Project Expenses', icon: 'briefcase', desc: 'Direct Costs' },
                 { name: 'Quickpay Cash Flow', icon: 'zap', desc: 'Viva / Supply Chain' },
                 { name: 'Operating Budget', icon: 'building', desc: 'OpEx / G&A' },
                 { name: 'Financing Cash Flow', icon: 'landmark', desc: 'Debt Service' },
@@ -416,7 +416,7 @@
 
         // --- MODULE VIEW: WITH PROCORE DETAILS ---
         function renderModuleView(type) {
-            const map = { 'WIP Forecast': 'WIP', 'Pipeline Forecast': 'Pipeline', 'Project Cash Flow': 'ProjectCF', 'Quickpay Cash Flow': 'QuickPay', 'Operating Budget': 'OpBudget', 'Financing Cash Flow': 'Financing', 'Lines of Credit': 'CreditLines' };
+            const map = { 'WIP Forecast': 'WIP', 'Pipeline Forecast': 'Pipeline', 'Project Expenses': 'ProjectCF', 'Quickpay Cash Flow': 'QuickPay', 'Operating Budget': 'OpBudget', 'Financing Cash Flow': 'Financing', 'Lines of Credit': 'CreditLines' };
             let data = getFiltered(map[type]);
 
             if (searchQuery) {
@@ -951,7 +951,7 @@
             btn.innerText = "Saving...";
             btn.disabled = true;
             
-            const map = { 'WIP Forecast': 'WIP', 'Pipeline Forecast': 'Pipeline', 'Project Cash Flow': 'ProjectCF', 'Quickpay Cash Flow': 'QuickPay', 'Operating Budget': 'OpBudget', 'Financing Cash Flow': 'Financing', 'Lines of Credit': 'CreditLines' };
+            const map = { 'WIP Forecast': 'WIP', 'Pipeline Forecast': 'Pipeline', 'Project Expenses': 'ProjectCF', 'Quickpay Cash Flow': 'QuickPay', 'Operating Budget': 'OpBudget', 'Financing Cash Flow': 'Financing', 'Lines of Credit': 'CreditLines' };
             const targetTab = map[currentView];
             
             let payload = {};
