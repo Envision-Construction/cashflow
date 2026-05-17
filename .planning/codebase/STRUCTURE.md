@@ -11,7 +11,6 @@ cashflow/
 │   └── settings.json           # VSCode Python environment config
 ├── node_modules/               # Dependencies (Express, Firebase Tools)
 ├── .git/                        # Git repository
-├── .omc/                        # OMC orchestration state
 ├── .planning/                   # Planning and analysis documents
 │   └── codebase/               # Codebase mapping documents
 ├── server.js                    # Express server entry point
@@ -84,7 +83,7 @@ cashflow/
 
 **Directories:**
 - Lowercase: `.vscode`, `.planning`, `node_modules`
-- Dot-prefix for hidden/special: `.git`, `.omc`, `.planning`, `.firebaserc`, `.gitignore`
+- Dot-prefix for hidden/special: `.git`, `.planning`, `.firebaserc`, `.gitignore`
 
 **Functions (JavaScript):**
 - camelCase with descriptive verbs: `renderDashboard()`, `processFinancingData()`, `generateLiabilitySchedule()`, `getFiltered()`, `sum()`
@@ -140,12 +139,6 @@ cashflow/
 - Generated: Yes (by GSD codebase mapper)
 - Committed: Yes (tracking analysis over time)
 - Do not manually edit - regenerate with `/gsd:map-codebase arch`
-
-**`.omc/`:**
-- Purpose: Oh-My-Claude orchestration state and memory
-- Generated: Yes (by OMC infrastructure)
-- Committed: Yes (preserves session state)
-- Do not manually edit
 
 **`node_modules/`:**
 - Purpose: Installed dependencies
